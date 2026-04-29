@@ -1,0 +1,193 @@
+const axios = require('axios');
+const { detectChannel } = require('./detect');
+
+const BASE_URL = process.env.JUBELIO_BASE_URL || 'https://api2.jubelio.com';
+const TOKEN_TTL_MS = 11 * 60 * 60 * 1000;
+
+const tokenCache = { value: null, expiresAt: 0 };
+
+const http = axios.create({
+  baseURL: BASE_URL,
+  timeout: 30_000,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+async function login() {
+  const email = process.env.JUBELIO_API_USERNAME;
+  const password = process.env.JUBELIO_API_PASSWORD;
+  if (!email || !password) {
+    throw new Error('JUBELIO_API_USERNAME / JUBELIO_API_PASSWORD belum di-set di .env');
+  }
+  const { data } = await http.post('/login', { email, password });
+  if (!data || !data.token) throw new Error('Login Jubelio gagal: token kosong');
+  return data.token;
+}
+
+async function getToken({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && tokenCache.value && now < tokenCache.expiresAt) return tokenCache.value;
+  const token = await login();
+  tokenCache.value = token;
+  tokenCache.expiresAt = now + TOKEN_TTL_MS;
+  return token;
+}
+
+const authHeaders = (token) => ({ Authorization: token });
+
+async function withAuth(fn) {
+  let token = await getToken();
+  try {
+    return await fn(token);
+  } catch (err) {
+    if (err.response && err.response.status === 401) {
+      token = await getToken({ forceRefresh: true });
+      return await fn(token);
+    }
+    throw err;
+  }
+}
+
+async function tryGetOrderByNo(salesorderNo) {
+  return withAuth(async (token) => {
+    try {
+      const { data } = await http.post(
+        '/wms/order/getOrderByNo/',
+        { salesorder_no: salesorderNo },
+        { headers: authHeaders(token) },
+      );
+      if (data && data.salesorder_id) return { salesorder_id: data.salesorder_id, matched: salesorderNo };
+      return null;
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 404 || status === 400) return null;
+      throw err;
+    }
+  });
+}
+
+const SEARCH_PATHS = [
+  '/sales/orders/completed/',
+  '/sales/orders/cancel/',
+  '/sales/orders/failed/',
+  '/sales/orders/returned-list/',
+  '/wms/sales/orders/ready-to-pick/',
+  '/wms/sales/orders/ready-to-process/',
+  '/wms/sales/orders/empty-stock/',
+  '/wms/sales/orders/finish-pick/',
+  '/wms/sales/orders/request-cancel/',
+  '/wms/sales/order/ready-to-ship',
+  '/wms/sales/shipped/',
+  '/wms/sales/picklists/confirm-pick/',
+  '/wms/sales/packlists/finish-pack/',
+];
+
+function pickFromRows(rows, { stems = [], candidates = [] } = {}) {
+  if (!rows.length) return null;
+  const exact = rows.find((r) => r?.salesorder_no && candidates.includes(r.salesorder_no));
+  if (exact) return exact;
+  if (stems.length) {
+    const stemHit = rows.find((r) => r?.salesorder_no && stems.some((p) => r.salesorder_no.startsWith(p)));
+    if (stemHit) return stemHit;
+  }
+  return rows.find((r) => r && r.salesorder_id) || null;
+}
+
+async function trySearchByQuery(query, opts = {}) {
+  return withAuth(async (token) => {
+    for (const path of SEARCH_PATHS) {
+      try {
+        const { data } = await http.get(path, {
+          params: { q: query, pageSize: 20 },
+          headers: authHeaders(token),
+        });
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const hit = pickFromRows(rows, opts);
+        if (hit) return { salesorder_id: hit.salesorder_id, matched: hit.salesorder_no || query, via: path };
+      } catch (err) {
+        if (err.response?.status === 401) throw err;
+      }
+    }
+    return null;
+  });
+}
+
+async function getOrderDetail(salesorderId) {
+  return withAuth(async (token) => {
+    const { data } = await http.get(`/sales/orders/${salesorderId}`, {
+      headers: authHeaders(token),
+    });
+    return data;
+  });
+}
+
+async function smartLookup(rawInput) {
+  const detection = detectChannel(rawInput);
+  const tried = [];
+
+  for (const candidate of detection.candidates) {
+    tried.push({ method: 'getOrderByNo', value: candidate });
+    const hit = await tryGetOrderByNo(candidate);
+    if (hit) {
+      const detail = await getOrderDetail(hit.salesorder_id);
+      return {
+        found: true,
+        detection: { channel: detection.channel, raw: detection.raw, normalized: detection.normalized },
+        match: { ...hit, method: 'getOrderByNo' },
+        tried,
+        order: detail,
+      };
+    }
+  }
+
+  for (const q of detection.queries) {
+    tried.push({ method: 'search', value: q });
+    const hit = await trySearchByQuery(q, {
+      stems: detection.stems,
+      candidates: detection.candidates,
+    });
+    if (hit) {
+      const detail = await getOrderDetail(hit.salesorder_id);
+      return {
+        found: true,
+        detection: { channel: detection.channel, raw: detection.raw, normalized: detection.normalized },
+        match: { ...hit, method: 'search' },
+        tried,
+        order: detail,
+      };
+    }
+  }
+
+  return {
+    found: false,
+    detection: { channel: detection.channel, raw: detection.raw, normalized: detection.normalized },
+    tried,
+  };
+}
+
+async function listOrders({ status = 'completed', q = '', pageSize = 10 } = {}) {
+  const map = {
+    completed: '/sales/orders/completed/',
+    cancel: '/sales/orders/cancel/',
+    failed: '/sales/orders/failed/',
+    returned: '/sales/orders/returned-list/',
+  };
+  const path = map[status] || map.completed;
+  return withAuth(async (token) => {
+    const { data } = await http.get(path, {
+      params: q ? { q, pageSize } : { pageSize },
+      headers: authHeaders(token),
+    });
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    return rows.map((r) => ({
+      salesorder_id: r.salesorder_id,
+      salesorder_no: r.salesorder_no,
+      channel_name: r.channel_name,
+      store_name: r.store_name,
+      transaction_date: r.transaction_date,
+      grand_total: r.grand_total,
+      internal_status: r.internal_status,
+    }));
+  });
+}
+
+module.exports = { smartLookup, getOrderDetail, tryGetOrderByNo, trySearchByQuery, listOrders };
