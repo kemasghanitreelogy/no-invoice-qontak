@@ -39,9 +39,13 @@ app.post('/api/orders/lookup', async (req, res) => {
     }
     const verbose = req.query.verbose === '1' || req.body?.verbose === true;
     const summary = formatOrder(result.order);
+    // Channel asli dari order Jubelio (source_name) lebih akurat daripada tebakan
+    // berdasarkan format input — angka panjang ambigu antara tiktok & tokopedia.
+    const detected_channel =
+      (summary?.channel || result.detection.channel || 'unknown').toLowerCase();
     return res.json({
       input,
-      detected_channel: result.detection.channel,
+      detected_channel,
       ...summary,
       ...(verbose ? { _raw: result.order } : {}),
     });
