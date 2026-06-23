@@ -36,7 +36,11 @@ function build(channel, core, raw) {
   const lastNum = lastNumericChunk(raw);
   const candidates = uniq(candidatesFor(channel, core, raw));
   const stems = uniq(stemsFor(channel, core, lastNum));
+  // Query berprefix (mis. SHF-8321) didahulukan: filter `q` Jubelio mem-filter
+  // berdasarkan Sales Order Number, dan term pendek seperti "8321" cenderung
+  // diabaikan sehingga API balikin daftar penuh (memunculkan order yang salah).
   const queries = uniq([
+    ...candidates,
     core,
     lastNum,
     raw,

@@ -81,7 +81,7 @@ const SEARCH_PATHS = [
   '/wms/sales/packlists/finish-pack/',
 ];
 
-function pickFromRows(rows, { stems = [], candidates = [] } = {}) {
+function pickFromRows(rows, { stems = [], candidates = [], query = '' } = {}) {
   if (!rows.length) return null;
   const exact = rows.find((r) => r?.salesorder_no && candidates.includes(r.salesorder_no));
   if (exact) return exact;
@@ -89,7 +89,20 @@ function pickFromRows(rows, { stems = [], candidates = [] } = {}) {
     const stemHit = rows.find((r) => r?.salesorder_no && stems.some((p) => r.salesorder_no.startsWith(p)));
     if (stemHit) return stemHit;
   }
-  return rows.find((r) => r && r.salesorder_id) || null;
+  // Hanya terima baris yang salesorder_no / ref_no-nya benar-benar mengandung query.
+  // JANGAN asal ambil baris pertama: endpoint Jubelio bisa mengembalikan daftar
+  // order walau query tidak match, dan itu memunculkan order yang salah.
+  const q = String(query || '').trim();
+  if (q.length >= 4) {
+    const needle = q.startsWith('#') ? q.slice(1) : q;
+    const contains = rows.find((r) => {
+      const no = String(r?.salesorder_no || '');
+      const ref = String(r?.ref_no || '');
+      return no.includes(needle) || ref.includes(needle);
+    });
+    if (contains) return contains;
+  }
+  return null;
 }
 
 async function trySearchByQuery(query, opts = {}) {
@@ -97,11 +110,11 @@ async function trySearchByQuery(query, opts = {}) {
     for (const path of SEARCH_PATHS) {
       try {
         const { data } = await http.get(path, {
-          params: { q: query, pageSize: 20 },
+          params: { q: query, pageSize: 100 },
           headers: authHeaders(token),
         });
         const rows = Array.isArray(data?.data) ? data.data : [];
-        const hit = pickFromRows(rows, opts);
+        const hit = pickFromRows(rows, { ...opts, query });
         if (hit) return { salesorder_id: hit.salesorder_id, matched: hit.salesorder_no || query, via: path };
       } catch (err) {
         if (err.response?.status === 401) throw err;
