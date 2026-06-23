@@ -32,11 +32,23 @@ function buildHistory(order) {
 
 function formatOrder(order) {
   if (!order || typeof order !== 'object') return null;
-  const products = (order.items || []).map((it) => ({
-    name: it.item_name || it.description || it.item_code || '(tanpa nama)',
-    sku: it.item_code || null,
-    qty: Number(it.qty || 0),
-  }));
+  const num = (v) => (v != null && v !== '' ? Number(v) : 0);
+  const products = (order.items || []).map((it) => {
+    const qty = num(it.qty);
+    // Harga net per unit = sell_price (sama dgn katalog master). `price` adalah
+    // harga listing channel SEBELUM diskon (mis. Tokopedia 940rb -> net 790rb).
+    const unitPrice = num(it.sell_price ?? it.original_price);
+    const subtotal = it.amount != null ? num(it.amount) : unitPrice * qty;
+    return {
+      name: it.item_name || it.description || it.item_code || '(tanpa nama)',
+      sku: it.item_code || null,
+      qty,
+      price: unitPrice,                 // harga net per unit (sesuai katalog)
+      list_price: num(it.price),        // harga gross channel sebelum diskon
+      discount: num(it.disc_amount),    // nominal diskon per baris
+      subtotal,                         // total net baris (qty x net), = amount
+    };
+  });
   const history = buildHistory(order);
   const last_history = history.length ? history[history.length - 1] : null;
   return {
