@@ -1,0 +1,256 @@
+=====================================================================
+ DOKUMENTASI LENGKAP — API GET ORDER BERDASARKAN NAMA (+ TANGGAL)
+ Endpoint : POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name
+ Versi    : Engine matching v2 (typo-tolerant + sinonim + payment date)
+ Update   : 6 Juli 2026
+=====================================================================
+
+RINGKASAN SATU KALIMAT
+----------------------
+Kirim nama pemesan (boleh typo), opsional tanggal bayar (format bebas),
+dan API mengembalikan detail order Jubelio lengkap beserta tingkat
+keyakinan (confidence) — dirancang agar tidak pernah salah kasih
+order milik orang lain.
+
+
+1. CARA MEMANGGIL
+=====================================================================
+Method       : POST (GET ditolak dengan 405)
+URL          : https://api-nopesanan-qontak.vercel.app/api/orders/by-name
+Header       : Content-Type: application/json
+Body         : raw JSON
+
+Body paling sederhana:
+    { "name": "Komang Rahayu" }
+
+Body dengan tanggal (lebih akurat):
+    { "name": "Komang Rahayu", "date": "17 april" }
+
+
+2. FIELD BODY
+=====================================================================
+name  (WAJIB)
+    - Nama pemesan ATAU nama penerima di alamat pengiriman.
+    - Minimal 3 huruf. Boleh nama depan saja, boleh typo.
+    - Alias yang juga diterima: "nama", "customer_name", "shipping_name".
+
+date  (OPSIONAL — sangat disarankan saat hasil ambigu)
+    - TANGGAL BAYAR (payment date) menurut pelanggan, waktu Indonesia (WIB).
+    - Alias: "tanggal", "payment_date".
+    - Format BEBAS, parser otomatis memahami:
+        Angka       : 17/04/2026 · 1/1/2026 · 17-4-26 · 17.04.2026
+                      04/17/2026 (gaya Amerika -> otomatis ditukar)
+        Nama bulan  : 1 januari 2026 · 01 Januari 2026 · 1 jan 26
+                      tgl 17 april · 17 October 2025
+        Typo bulan  : 1 jnauari · 17 agsutus · 3 pebruari · 17 aprl
+        Relatif     : hari ini · kemarin · kemaren · kemarin lusa
+        Singkat     : "17/4"  -> 17 April tahun berjalan
+                      "17"    -> tanggal 17 bulan & tahun berjalan
+    - Aturan otomatis:
+        * Tanpa tahun  -> tahun berjalan.
+        * Hanya angka hari -> bulan & tahun berjalan.
+    - Toleransi pencocokan: +/- 1 hari (karena data Jubelio tersimpan UTC,
+      sedangkan pelanggan berpikir dalam WIB — konversi ditangani API).
+
+
+3. CARA KERJA MESIN PENCARI (kenapa "canggih")
+=====================================================================
+a) TOLERAN TYPO
+   "Komanng Rahau" tetap menemukan "Komang Rahayu Lestari".
+   Algoritma: Damerau-Levenshtein + Jaro-Winkler dengan pengaman:
+   nama pendek beda 1 huruf (Budi vs Rudi) TIDAK pernah dianggap yakin.
+
+b) PAHAM SINONIM & EJAAN LAMA
+   - Nickname   : Moh/Moch/Muh = Muhammad, Rizqi/Riski = Rizky, dst.
+   - Ejaan lama : Oemar = Umar, Djoko = Joko, Tjahjadi = Cahyadi.
+   - Fonetik    : Jusuf = Yusuf, Vitri = Fitri.
+
+c) SADAR KONTEKS DATA INDONESIA
+   - Sapaan/gelar diabaikan: "Ibu Komang" = "Komang"; H., S.E., dst.
+   - Token nama pasaran (Sari, Dewi, Putri...) dan penanda Bali
+     (Ni, Made, Kadek, Komang...) berbobot rendah — match di token
+     langka lebih dipercaya.
+   - Nama tersensor marketplace ("S***n L***n") hanya bisa jadi
+     kandidat lemah, tidak pernah dipilih dengan yakin.
+
+d) TANGGAL BAYAR SEBAGAI PEMBEDA
+   Kalau ada beberapa pelanggan mirip, tanggal bayar dipakai untuk:
+   - mengurutkan hasil (yang tanggalnya cocok naik ke atas),
+   - memecah ambiguitas OTOMATIS bila tepat SATU pelanggan yang cocok
+     (ditandai "resolved_by_date": true).
+
+e) MENCAKUP SEMUA STATUS ORDER
+   Completed, cancel, failed, returned, ready-to-pick/process/ship,
+   shipped, dan lainnya — semua channel (Shopee, Tokopedia, Shopify,
+   TikTok) yang terhubung ke Jubelio.
+
+
+4. RESPONSE — ARTI SETIAP FIELD
+=====================================================================
+Contoh response sukses:
+
+{
+  "input": "Komanng Rahau",
+  "date": "2026-04-17",             <- hanya ada jika body mengirim date
+  "resolved_by_date": false,        <- true = tanggal yang memecah ambiguitas
+  "total_found": 4,                 <- total kandidat yang lolos saringan
+  "count": 1,                       <- jumlah order yang dikembalikan (maks 5)
+  "is_ambiguous": false,            <- true = ADA >1 pelanggan mirip, JANGAN auto-pick
+  "orders": [
+    {
+      "match_score": 0.954,         <- skor kemiripan nama 0..1
+      "confidence": "strong",       <- tingkat keyakinan (lihat tabel di bawah)
+      "match_basis": "customer",    <- match di nama pemesan / "shipping" (penerima)
+      "matched_name": "Komang Rahayu Lestari",
+      "shipping_name": "Komang Rahayu Lestari",
+      "payment_date": "2026-04-16T22:03:39.000Z",   <- UTC (= 17 Apr WIB)
+      "date_match": true,           <- hanya ada jika date dikirim; cocok +/-1 hari
+      "salesorder_no": "TP-583564250368280183-128884",
+      "ref_no": "583564250368280183",
+      "channel": "TOKOPEDIA",
+      "store": "Treelogy Moringa (TTS)",
+      "customer": "Komang Rahayu Lestari",
+      "status": "COMPLETED",
+      "transaction_date": "2026-04-16T22:02:59.000Z",
+      "grand_total": 790000,
+      "last_history": { "history_name": "Selesai", "at": "...", "by": "system" },
+      "products": [
+        {
+          "name": "TREELOGY Premium Organic Moringa Seed Oil - 60 ml",
+          "sku": "OMO-60-001",
+          "qty": 1,
+          "price": 790000,          <- harga NET per unit (sesuai katalog)
+          "list_price": 940000,     <- harga coret channel sebelum diskon
+          "discount": 150000,
+          "subtotal": 790000
+        }
+      ],
+      "history": [
+        { "history_id": 1, "history_name": "Dibuat",  "at": "...", "by": "TOKOPEDIA" },
+        { "history_id": 2, "history_name": "Dibayar", "at": "...", "by": "system" },
+        { "history_id": 3, "history_name": "Diambil", "at": "...", "by": "kemas@treelogy.com" },
+        { "history_id": 4, "history_name": "Dikirim", "at": "...", "by": "system" },
+        { "history_id": 5, "history_name": "Selesai", "at": "...", "by": "system" }
+      ]
+    }
+  ]
+}
+
+TABEL CONFIDENCE — CARA MENYIKAPINYA:
+  exact            Nama persis sama. Aman dipakai langsung.
+  strong           Sangat yakin (typo kecil/sinonim). Aman dipakai langsung.
+  probable         Cukup yakin TAPI wajib konfirmasi dulu ke pelanggan
+                   (contoh: pelanggan cuma sebut "Sari").
+  masked_possible  Nama di marketplace tersensor (S***n) — hanya dugaan,
+                   wajib konfirmasi dengan data lain (tanggal/produk).
+
+CATATAN PENTING:
+  - "is_ambiguous": true  -> ada >= 2 PELANGGAN BERBEDA dengan skor
+    berimpit. Jangan pilihkan otomatis; minta tanggal bayar, lalu
+    panggil ulang API dengan field "date".
+  - Banyak order dari 1 orang yang sama BUKAN ambigu — semuanya
+    dikembalikan (maks 5).
+  - Hasil selalu diurutkan: paling cocok dulu; kalau ada "date",
+    yang tanggal bayarnya paling dekat naik ke atas.
+
+
+5. RESPONSE ERROR
+=====================================================================
+400  { "error": "nama wajib diisi (minimal 3 huruf)", "hint": "..." }
+     -> body tidak punya name / terlalu pendek.
+
+400  { "error": "format tanggal tidak dikenali", "hint": "..." }
+     -> date benar-benar tidak bisa diparse (contoh: "besok lusa entah").
+
+404  { "error": "Tidak ada pesanan yang cocok dengan nama tersebut",
+       "input": "...", "queries_tried": [...] }
+     -> tidak ada pelanggan yang cukup mirip. queries_tried berguna
+        untuk debug (potongan nama apa saja yang dicoba ke Jubelio).
+
+405  -> dipanggil dengan GET. Gunakan POST body raw JSON.
+
+502/5xx -> gangguan upstream Jubelio; coba ulang beberapa saat.
+
+
+6. RESEP "GET ORDER DENGAN CANGGIH" — ALUR UNTUK BOT CS / AGENT
+=====================================================================
+LANGKAH 1  Tanya nama pemesan, panggil API hanya dengan { "name": ... }.
+
+LANGKAH 2  Baca response:
+   - confidence exact/strong + is_ambiguous false
+        -> LANGSUNG jawab pelanggan pakai data orders[0].
+   - is_ambiguous true ATAU semua confidence probable
+        -> JANGAN menebak. Tanya: "Boleh info tanggal pembayarannya?"
+   - 404
+        -> minta ejaan nama yang benar / nama penerima di alamat, atau
+           tawarkan cari via nomor pesanan (endpoint /api/orders/lookup).
+
+LANGKAH 3  Panggil ulang dengan tanggal, apa adanya dari pelanggan:
+        { "name": "sari", "date": "kemarin" }
+        { "name": "sari", "date": "17 april" }
+        { "name": "sari", "date": "17/04/2026" }
+   - resolved_by_date true  -> ambiguitas pecah, pakai hasilnya.
+   - masih ambigu (dua orang bayar di tanggal sama) -> minta pembeda
+     lain: nama produk, channel (Shopee/Tokopedia/...), atau grand total,
+     lalu cocokkan manual dari daftar orders yang dikembalikan.
+
+LANGKAH 4  Menjawab pelanggan — field yang paling berguna:
+   - status + last_history  : posisi pesanan sekarang ("Dikirim", dsb.)
+   - history                : kronologi lengkap Dibuat->Dibayar->Dikirim...
+   - products (name, qty, price) + grand_total : rincian belanja
+   - salesorder_no + channel + store : identitas pesanan
+
+ATURAN EMAS (privasi):
+   - JANGAN bacakan detail order kalau confidence masih "probable" /
+     "masked_possible" sebelum pelanggan mengonfirmasi (mis. tanggal
+     bayar atau produk yang dibeli cocok).
+   - date_match false pada kandidat teratas = sinyal kuat itu BUKAN
+     order yang dimaksud.
+
+
+7. CONTOH-CONTOH SIAP PAKAI (curl / Postman)
+=====================================================================
+# a. Nama typo — tetap ketemu
+curl -X POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Komanng Rahau"}'
+# -> strong 0.954, Komang Rahayu Lestari, 1 order lengkap
+
+# b. Nama + tanggal bayar (bulan typo pun boleh)
+curl -X POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Komanng Rahau", "date": "17 aprl 2026"}'
+# -> date terparse 2026-04-17, date_match: true
+
+# c. Nama pasaran -> ambigu, bot harus tanya tanggal
+curl -X POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name \
+  -H "Content-Type: application/json" \
+  -d '{"name": "sari"}'
+# -> is_ambiguous: true + hint konfirmasi
+
+# d. Tanggal singkat: hanya angka hari (bulan & tahun berjalan)
+curl -X POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Winanci Rahayu", "date": "5"}'
+# -> date terparse 2026-07-05, exact + date_match: true
+
+# e. Sapaan & ejaan bebas
+curl -X POST https://api-nopesanan-qontak.vercel.app/api/orders/by-name \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Ibu Ratna Sarie", "date": "kemarin"}'
+
+Postman: method POST -> URL di atas -> tab Body -> raw -> JSON ->
+tempel salah satu body di atas -> Send.
+
+
+8. BATASAN YANG PERLU DIKETAHUI
+=====================================================================
+- Maksimal 5 order per panggilan (kandidat paling yakin).
+- Hanya order yang ADA di Jubelio (semua marketplace terhubung).
+  Invoice manual di QuickBooks / penjualan di luar Jubelio tidak
+  akan pernah ketemu di sini.
+- Request pertama setelah idle bisa 2-5 detik (login Jubelio +
+  cold start); berikutnya cepat.
+- Pencocokan tanggal memakai PAYMENT DATE (tanggal bayar), bukan
+  tanggal checkout/kirim. Order belum dibayar -> date_match false.
+=====================================================================
