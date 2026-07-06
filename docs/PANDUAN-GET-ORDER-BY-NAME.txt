@@ -110,6 +110,17 @@ Contoh response sukses:
       "channel": "TOKOPEDIA",
       "store": "Treelogy Moringa (TTS)",
       "customer": "Komang Rahayu Lestari",
+      "shipping": {                 <- ALAMAT PENGIRIMAN LENGKAP
+        "name": "Komang Rahayu Lestari",
+        "phone": "**************22",      <- sering disensor marketplace
+        "address": "Jalan By Pass Ngurah Rai no 1 ... Sanur Kauh, Denpasar Selatan, Kota Denpasar, Bali",
+        "area": "Denpasar Selatan",
+        "city": "Kota Denpasar",
+        "province": "Bali",
+        "post_code": null,
+        "country": "Indonesia",
+        "courier": "Grab INSTANT"         <- kurir/ekspedisi yang dipakai
+      },
       "status": "COMPLETED",
       "transaction_date": "2026-04-16T22:02:59.000Z",
       "grand_total": 790000,
@@ -199,6 +210,9 @@ LANGKAH 4  Menjawab pelanggan — field yang paling berguna:
    - history                : kronologi lengkap Dibuat->Dibayar->Dikirim...
    - products (name, qty, price) + grand_total : rincian belanja
    - salesorder_no + channel + store : identitas pesanan
+   - shipping (address, city, province, courier) : alamat tujuan & kurir —
+     juga berguna untuk VERIFIKASI ("pesanan dikirim ke Denpasar ya?")
+     tanpa membacakan alamat lengkap lebih dulu
 
 ATURAN EMAS (privasi):
    - JANGAN bacakan detail order kalau confidence masih "probable" /

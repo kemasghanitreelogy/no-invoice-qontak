@@ -218,6 +218,12 @@ Jika `date` diisi: tiap order diberi `date_match` (payment_date order, dikonvers
       "salesorder_no": "TP-583564250368280183-128884",
       "channel": "TOKOPEDIA",
       "customer": "Komang Rahayu Lestari",
+      "shipping": {
+        "name": "Komang Rahayu Lestari", "phone": "**************22",
+        "address": "Jalan By Pass Ngurah Rai no 1 ...", "area": "Denpasar Selatan",
+        "city": "Kota Denpasar", "province": "Bali", "post_code": null,
+        "country": "Indonesia", "courier": "Grab INSTANT"
+      },
       "status": "COMPLETED",
       "grand_total": 790000,
       "products": [ { "name": "...", "qty": 1, "price": 790000, "subtotal": 790000 } ],

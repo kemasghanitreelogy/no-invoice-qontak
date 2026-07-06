@@ -57,6 +57,17 @@ function formatOrder(order) {
     channel: order.source_name || null,
     store: order.store_name || null,
     customer: order.customer_name || null,
+    shipping: {
+      name: order.shipping_full_name || null,
+      phone: order.shipping_phone || null, // sering disensor marketplace (****22)
+      address: order.shipping_address || null,
+      area: order.shipping_area || null,
+      city: order.shipping_city || null,
+      province: order.shipping_province || null,
+      post_code: order.shipping_post_code || null,
+      country: order.shipping_country || null,
+      courier: order.shipper || null,
+    },
     status: order.internal_status || order.wms_status || order.channel_status || null,
     transaction_date: order.transaction_date || null,
     last_history,
