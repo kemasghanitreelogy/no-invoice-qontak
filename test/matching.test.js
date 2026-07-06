@@ -155,13 +155,54 @@ test('GUARD inisial: gibberish tidak boleh menunggangi inisial target (temuan ev
   assert.ok(['strong', 'exact'].includes(ok.confidence));
 });
 
-test('dates: parse input & konversi WIB', () => {
-  const { parseDateInput, wibDateOf, diffDays } = require('../src/dates');
-  assert.equal(parseDateInput('2026-04-17'), '2026-04-17');
-  assert.equal(parseDateInput('17/04/2026'), '2026-04-17');
-  assert.equal(parseDateInput('17-4-2026'), '2026-04-17');
-  assert.equal(parseDateInput('31/02/2026'), null);
-  assert.equal(parseDateInput('kemarin'), null);
+test('dates: parser pintar segala format', () => {
+  const { parseDateInput } = require('../src/dates');
+  // "sekarang" = 2026-07-06 12:00 WIB
+  const NOW = new Date('2026-07-06T05:00:00Z');
+  const p = (s) => parseDateInput(s, NOW);
+
+  // Numerik segala gaya
+  assert.equal(p('2026-04-17'), '2026-04-17');
+  assert.equal(p('17/04/2026'), '2026-04-17');
+  assert.equal(p('17-4-26'), '2026-04-17');
+  assert.equal(p('17.04.2026'), '2026-04-17');
+  assert.equal(p('1/1/2026'), '2026-01-01');
+  assert.equal(p('04/17/2026'), '2026-04-17'); // gaya Amerika -> ditukar otomatis
+
+  // Nama bulan Indonesia/Inggris + prefiks penunjuk
+  assert.equal(p('1 januari 2026'), '2026-01-01');
+  assert.equal(p('01 Januari 2026'), '2026-01-01');
+  assert.equal(p('tgl 17 april 2026'), '2026-04-17');
+  assert.equal(p('1 jan 26'), '2026-01-01');
+  assert.equal(p('3 pebruari 2026'), '2026-02-03'); // ejaan lama
+  assert.equal(p('17 October 2025'), '2025-10-17');
+
+  // Typo nama bulan (Damerau)
+  assert.equal(p('1 jnauari 2026'), '2026-01-01');
+  assert.equal(p('17 agsutus 2025'), '2025-08-17');
+  assert.equal(p('5 setember 2025'), '2025-09-05');
+
+  // Tanpa tahun -> tahun berjalan; masa depan -> mundur (payment date pasti lampau)
+  assert.equal(p('1 januari'), '2026-01-01'); // sudah lewat -> tahun ini
+  assert.equal(p('31 desember'), '2025-12-31'); // masa depan -> tahun lalu
+  assert.equal(p('17/4'), '2026-04-17');
+  assert.equal(p('17'), '2026-06-17'); // hari 17 bulan ini masa depan -> bulan lalu
+  assert.equal(p('5'), '2026-07-05');
+
+  // Relatif
+  assert.equal(p('hari ini'), '2026-07-06');
+  assert.equal(p('kemarin'), '2026-07-05');
+  assert.equal(p('kemaren'), '2026-07-05');
+
+  // Invalid tetap ditolak
+  assert.equal(p('31/02/2026'), null);
+  assert.equal(p('32/01/2026'), null);
+  assert.equal(p('abc'), null);
+  assert.equal(p(''), null);
+});
+
+test('dates: konversi WIB & selisih hari', () => {
+  const { wibDateOf, diffDays } = require('../src/dates');
   // 16 Apr 22:03 UTC = 17 Apr 05:03 WIB — pembandingan harus pakai WIB
   assert.equal(wibDateOf('2026-04-16T22:03:39.000Z'), '2026-04-17');
   assert.equal(wibDateOf('2026-04-16T10:00:00.000Z'), '2026-04-16');

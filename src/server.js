@@ -88,7 +88,7 @@ async function handleSearchByName(req, res) {
     if (!targetDate) {
       return res.status(400).json({
         error: 'format tanggal tidak dikenali',
-        hint: 'Gunakan "YYYY-MM-DD" atau "DD/MM/YYYY", contoh: "2026-04-17" atau "17/04/2026"',
+        hint: 'Contoh yang diterima: "17/04/2026", "2026-04-17", "17 april 2026", "1 jan", "kemarin". Tanpa tahun otomatis pakai tahun berjalan.',
       });
     }
   }

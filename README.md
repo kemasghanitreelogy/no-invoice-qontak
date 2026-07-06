@@ -196,7 +196,7 @@ curl -X POST http://localhost:3000/api/orders/by-name \
 | Field body | Wajib? | Keterangan |
 |---|---|---|
 | `name` | ya | Min 3 huruf. Alias: `nama` / `customer_name` / `shipping_name` |
-| `date` | tidak | **Tanggal bayar** (payment date) versi pelanggan/WIB, untuk menaikkan akurasi. Format `YYYY-MM-DD` atau `DD/MM/YYYY`. Alias: `tanggal` / `payment_date` |
+| `date` | tidak | **Tanggal bayar** (payment date) versi pelanggan/WIB, untuk menaikkan akurasi. Format bebas: `17/04/2026`, `2026-04-17`, `17-4-26`, `04/17/2026` (US, ditukar otomatis), `1 januari 2026`, `1 jan 26`, `tgl 17 april`, `kemarin`, `hari ini` — nama bulan toleran typo (`jnauari`, `agsutus`, `pebruari`). Tanpa tahun → tahun berjalan; kalau jatuh di masa depan otomatis mundur (tanggal bayar pasti lampau). Alias: `tanggal` / `payment_date` |
 
 Jika `date` diisi: tiap order diberi `date_match` (payment_date order, dikonversi UTC→WIB, cocok ±1 hari), hasil diurut dari yang tanggalnya paling dekat, dan bila hasil tadinya ambigu tapi hanya **satu** pelanggan yang tanggal bayarnya cocok, ambiguitas dipecahkan otomatis (`resolved_by_date: true`).
 
