@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { detectChannel } = require('./detect');
+const { buildNameQueries, matchRow, decideMatches, normalizeName, TIER } = require('./matching');
 
 const BASE_URL = process.env.JUBELIO_BASE_URL || 'https://api2.jubelio.com';
 const TOKEN_TTL_MS = 11 * 60 * 60 * 1000;
@@ -177,6 +178,49 @@ async function smartLookup(rawInput) {
   };
 }
 
+// Cari order berdasarkan nama pemesan / nama penerima (shipping_full_name).
+// Engine v2 (docs/design-name-matching.md): toleran typo + sinonim/ejaan lama,
+// dengan decision policy eksplisit (tier confidence + ambiguity margin) supaya
+// tidak pernah percaya diri pada match yang meragukan.
+async function searchOrdersByName(name, { limit = 5 } = {}) {
+  const queryNorm = normalizeName(name);
+  const queries = buildNameQueries(name);
+  const tried = [];
+  const byId = new Map();
+
+  await withAuth(async (token) => {
+    for (const q of queries) {
+      tried.push(q);
+      const results = await Promise.allSettled(
+        SEARCH_PATHS.map((path) =>
+          http.get(path, { params: { q, pageSize: 50 }, headers: authHeaders(token) }),
+        ),
+      );
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          // 401 dilempar keluar supaya withAuth refresh token & retry.
+          if (r.reason?.response?.status === 401) throw r.reason;
+          continue;
+        }
+        const rows = Array.isArray(r.value.data?.data) ? r.value.data.data : [];
+        for (const row of rows) {
+          if (!row?.salesorder_id || byId.has(row.salesorder_id)) continue;
+          const match = matchRow(queryNorm, row);
+          if (match.score >= TIER.WEAK) byId.set(row.salesorder_id, { row, match });
+        }
+      }
+      // Early-stop hanya jika kandidat kuat sudah cukup DAN tidak ambigu —
+      // kalau ambigu kita justru butuh lebih banyak bukti dari query berikutnya.
+      const { primary, is_ambiguous } = decideMatches([...byId.values()], { limit });
+      const strong = primary.filter((e) => ['exact', 'strong'].includes(e.match.confidence));
+      if (strong.length >= limit && !is_ambiguous) break;
+    }
+  });
+
+  const decision = decideMatches([...byId.values()], { limit });
+  return { queries_tried: tried, ...decision };
+}
+
 async function listOrders({ status = 'completed', q = '', pageSize = 10 } = {}) {
   const map = {
     completed: '/sales/orders/completed/',
@@ -194,6 +238,8 @@ async function listOrders({ status = 'completed', q = '', pageSize = 10 } = {}) 
     return rows.map((r) => ({
       salesorder_id: r.salesorder_id,
       salesorder_no: r.salesorder_no,
+      customer_name: r.customer_name,
+      shipping_full_name: r.shipping_full_name,
       channel_name: r.channel_name,
       store_name: r.store_name,
       transaction_date: r.transaction_date,
@@ -203,4 +249,11 @@ async function listOrders({ status = 'completed', q = '', pageSize = 10 } = {}) 
   });
 }
 
-module.exports = { smartLookup, getOrderDetail, tryGetOrderByNo, trySearchByQuery, listOrders };
+module.exports = {
+  smartLookup,
+  getOrderDetail,
+  tryGetOrderByNo,
+  trySearchByQuery,
+  listOrders,
+  searchOrdersByName,
+};

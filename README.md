@@ -173,6 +173,78 @@ History otomatis di-skip jika field-nya null, dan di-sort ascending berdasarkan 
 
 ---
 
+### `GET /api/orders/by-name` / `POST /api/orders/by-name`
+
+Cari pesanan dari **nama pemesan** atau **nama penerima di alamat pengiriman** (`shipping_full_name`). Engine matching v2 (lihat `docs/design-name-matching.md`):
+
+- **Toleran typo** — Damerau-Levenshtein + Jaro-Winkler dengan guard edit-distance per panjang token: `"Komanng Rahau"` menemukan `"Komang Rahayu Lestari"`, tapi `"Budi"` tidak pernah dianggap yakin sama dengan `"Rudi"`.
+- **Paham sinonim & ejaan lama** — kamus nickname (`Moh` == `Muhammad`, `Rizqi` == `Rizky`) + transduser Ejaan Lama→EYD (`Oemar` == `Umar`, `Djoko` == `Joko`) + phonetic key Indonesia (`Jusuf` == `Yusuf`, `Vitri` == `Fitri`).
+- **Tier confidence** — tiap hasil membawa `confidence`: `exact` / `strong` / `probable` / `weak` / `masked_possible`. Bot CS sebaiknya hanya memakai `exact`/`strong` langsung; `probable` ke bawah wajib konfirmasi ke pelanggan dulu.
+- **Deteksi ambiguitas** — jika dua pelanggan *berbeda* punya skor berimpit (selisih < 0.05), response menyertakan `is_ambiguous: true` + `hint`; jangan auto-pick.
+- **Nama ter-masking marketplace** (`S***n L***n`) hanya bisa jadi kandidat `masked_possible` (skor cap 0.75), tidak pernah dipilih dengan yakin.
+
+Mencakup semua status order (completed, cancel, failed, returned, ready-to-pick/process/ship, shipped, dll.). Detail order lengkap hanya diberikan untuk kandidat ber-tier ≥ `probable`; tier `weak` cuma muncul ringkas di `alternatives` (privasi).
+
+**Input** (salah satu):
+
+```bash
+# GET query param
+curl 'http://localhost:3000/api/orders/by-name?name=Komanng%20Rahayu&limit=3'
+
+# POST body JSON (alias field: name / nama / customer_name / shipping_name)
+curl -X POST http://localhost:3000/api/orders/by-name \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Fenny Oey", "limit": 2}'
+```
+
+| Param | Tipe | Default | Keterangan |
+|---|---|---|---|
+| `name` | string | — | Wajib, minimal 3 huruf |
+| `limit` | int | `5` | Max 10 order yang dikembalikan |
+
+**Response 200** — tiap order berisi detail lengkap (produk, harga, history) sama seperti `/api/orders/lookup`, plus metadata kecocokan:
+
+```json
+{
+  "input": "Komanng Rahayu",
+  "total_found": 4,
+  "count": 1,
+  "is_ambiguous": false,
+  "orders": [
+    {
+      "match_score": 0.954,
+      "confidence": "strong",
+      "match_basis": "customer",
+      "matched_name": "Komang Rahayu Lestari",
+      "shipping_name": "Komang Rahayu Lestari",
+      "salesorder_no": "TP-583564250368280183-128884",
+      "channel": "TOKOPEDIA",
+      "customer": "Komang Rahayu Lestari",
+      "status": "COMPLETED",
+      "grand_total": 790000,
+      "products": [ { "name": "...", "qty": 1, "price": 790000, "subtotal": 790000 } ],
+      "history": [ { "history_name": "Dibuat", "at": "..." } ]
+    }
+  ],
+  "alternatives": [
+    { "match_score": 0.554, "confidence": "weak", "matched_name": "Ni Komang Sukereni",
+      "salesorder_no": "SHF-7695-128887", "channel": "SHOPIFY", "transaction_date": "..." }
+  ]
+}
+```
+
+Saat `is_ambiguous: true` ada field `hint` tambahan — konfirmasi dulu ke pelanggan sebelum memakai hasil teratas. Hasil diurutkan dari skor tertinggi, lalu tanggal transaksi terbaru. `404` jika tidak ada nama yang cukup mirip (`queries_tried` disertakan untuk debug).
+
+**Kualitas terukur** (jalankan sendiri):
+
+```bash
+npm test            # 18 unit test scorer, termasuk guard adversarial (Budi vs Rudi, dll.)
+npm run eval:names  # eval vs 200 nama riil + typo sintetis + 100 gibberish
+                    # syarat lulus: recovery >= 95%, false positive = 0
+```
+
+---
+
 ### `GET /api/orders/sample`
 
 Endpoint diagnostik untuk inspect format `salesorder_no` riil di akun Jubelio yang terhubung. Berguna untuk verifikasi prefix channel atau debug ketika lookup 404.

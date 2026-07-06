@@ -1,0 +1,162 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { normalizeName, isMaskedName, looksLikeAddress } = require('../src/matching/normalize');
+const { oldToEyd, phoneticKey } = require('../src/matching/phonetic');
+const { sameSynonymGroup } = require('../src/matching/synonyms');
+const { nameScore, damerauLevenshtein } = require('../src/matching/score');
+const { confidenceOf, matchRow, buildNameQueries, decideMatches, TIER } = require('../src/matching');
+
+const conf = (q, t) => {
+  const r = nameScore(normalizeName(q), normalizeName(t));
+  return { ...r, confidence: confidenceOf(r.score, r) };
+};
+
+test('normalisasi: honorifik, noise, diakritik', () => {
+  assert.equal(normalizeName('Ibu Komang Rahayu'), 'komang rahayu');
+  assert.equal(normalizeName('| Komang Budiasa'), 'komang budiasa');
+  assert.equal(normalizeName('H. Ahmad Yani, S.E.'), 'ahmad yani');
+  assert.equal(normalizeName('José'), 'jose');
+  // Semua token honorifik -> jangan jadi kosong
+  assert.equal(normalizeName('Ibu Hj'), 'ibu hj');
+});
+
+test('deteksi masking & alamat', () => {
+  assert.equal(isMaskedName('S***n L***n'), true);
+  assert.equal(isMaskedName('Komang Rahayu'), false);
+  assert.equal(looksLikeAddress('JIn Prof HB JASSIN NO.293'), true);
+  assert.equal(looksLikeAddress('Komang Rahayu Lestari'), false);
+});
+
+test('ejaan lama & fonetik', () => {
+  assert.equal(oldToEyd('oemar'), 'umar');
+  assert.equal(oldToEyd('djoko'), 'joko');
+  assert.equal(oldToEyd('tjahjadi'), 'cahjadi');
+  assert.equal(phoneticKey('tjahjadi'), phoneticKey('cahyadi'));
+  assert.equal(phoneticKey('jusuf'), phoneticKey('yusuf'));
+  assert.equal(phoneticKey('vitri'), phoneticKey('fitri'));
+});
+
+test('kamus sinonim', () => {
+  assert.equal(sameSynonymGroup('moh', 'muhammad'), true);
+  assert.equal(sameSynonymGroup('rizky', 'rizqi'), true);
+  assert.equal(sameSynonymGroup('yusuf', 'yosef'), false); // grup sengaja dipisah
+});
+
+test('damerau: transposisi = 1 edit', () => {
+  assert.equal(damerauLevenshtein('rahayu', 'rahyau'), 1);
+  assert.equal(damerauLevenshtein('komang', 'komanng'), 1);
+});
+
+test('typo recovery: tetap strong, tidak pernah exact', () => {
+  const r = conf('Komanng Rahau', 'Komang Rahayu Lestari');
+  assert.equal(r.confidence, 'strong');
+  const eyd = conf('Oemar Bakri', 'Umar Bakri');
+  assert.ok(['strong', 'exact'].includes(eyd.confidence), `oemar: ${eyd.confidence}`);
+});
+
+test('sinonim & inisial: strong tapi tidak exact', () => {
+  const r = conf('Moh Rizky', 'Muhammad Rizky');
+  assert.equal(r.confidence, 'strong');
+  assert.ok(r.score <= 0.96);
+  const ini = conf('M Rizky Pratama', 'Muhammad Rizky Pratama');
+  assert.ok(['strong', 'exact'].includes(ini.confidence));
+});
+
+test('urutan token bebas', () => {
+  const r = conf('Rahayu Komang', 'Komang Rahayu');
+  assert.ok(r.score >= TIER.EXACT, `reorder score ${r.score}`);
+});
+
+test('GUARD: nama pendek beda 1 huruf tidak pernah strong', () => {
+  for (const [a, b] of [
+    ['Budi', 'Rudi'],
+    ['Sari', 'Sadi'],
+    ['Dedi', 'Desi'],
+    ['Andi', 'Anti'],
+    ['Agus', 'Anus'],
+  ]) {
+    const r = conf(a, b);
+    assert.ok(
+      !['exact', 'strong'].includes(r.confidence),
+      `${a} vs ${b} tidak boleh ${r.confidence} (score ${r.score})`,
+    );
+  }
+});
+
+test('query semua token umum/pendek -> maksimal probable', () => {
+  const r = conf('sari', 'Ratna Sari');
+  assert.equal(r.confidence, 'probable');
+  const bali = conf('komang', 'Ni Komang Sukereni');
+  assert.equal(bali.confidence, 'probable');
+  // Bahkan match identik: "sari" == pelanggan bernama persis "Sari".
+  const identik = conf('sari', 'Sari');
+  assert.equal(identik.confidence, 'probable');
+});
+
+test('inisial di sisi target: kandidat sah tapi tidak pernah kuat', () => {
+  // "Dyah Ratna S" tidak boleh mengalahkan "Ratna Sari" untuk query "Ratna Sarie"
+  const abbrev = conf('Ratna Sarie', 'Dyah Ratna S');
+  const full = conf('Ratna Sarie', 'Ratna Sari');
+  assert.ok(full.score > abbrev.score, `full ${full.score} harus > abbrev ${abbrev.score}`);
+  assert.ok(!['exact', 'strong'].includes(abbrev.confidence));
+  // Tapi abreviasi yang benar-benar cocok tetap muncul sebagai kandidat.
+  const legit = conf('Dian Fitri Rahma', 'Dian Fitri R');
+  assert.ok(['probable', 'weak'].includes(legit.confidence), `legit: ${legit.confidence}`);
+});
+
+test('nama beda total -> none', () => {
+  const r = conf('Zulkifli Hasan', 'Komang Rahayu Lestari');
+  assert.equal(r.confidence, 'none');
+});
+
+test('masked: cap 0.75 + masked_possible, tidak pernah dipilih yakin', () => {
+  const row = { customer_name: 'S***n L***n', shipping_full_name: 'S***n L***n' };
+  const hit = matchRow(normalizeName('Susan Lubin'), row);
+  assert.equal(hit.confidence, 'masked_possible');
+  assert.equal(hit.score, TIER.MASKED_SCORE);
+  const miss = matchRow(normalizeName('Komang Rahayu'), row);
+  assert.equal(miss.score, 0);
+});
+
+test('alamat sebagai nama -> penalti + cap probable', () => {
+  const row = { customer_name: 'JIn Prof HB JASSIN NO.293', shipping_full_name: null };
+  const hit = matchRow(normalizeName('Jassin'), row);
+  assert.ok(hit.score < 0.9);
+  assert.ok(!['exact', 'strong'].includes(hit.confidence));
+});
+
+test('ambiguity margin: dua orang mirip -> is_ambiguous', () => {
+  const entries = [
+    { row: { salesorder_id: 1, transaction_date: '2026-01-01' }, match: { score: 0.9, confidence: 'strong', matched_name: 'Komang Rahayu' } },
+    { row: { salesorder_id: 2, transaction_date: '2026-01-02' }, match: { score: 0.88, confidence: 'strong', matched_name: 'Komang Rahayo' } },
+  ];
+  const d = decideMatches(entries, { limit: 5 });
+  assert.equal(d.is_ambiguous, true);
+});
+
+test('multi-order satu orang BUKAN ambigu', () => {
+  const entries = [
+    { row: { salesorder_id: 1, transaction_date: '2026-01-01' }, match: { score: 0.95, confidence: 'strong', matched_name: 'Komang Rahayu' } },
+    { row: { salesorder_id: 2, transaction_date: '2026-01-02' }, match: { score: 0.95, confidence: 'strong', matched_name: 'komang rahayu' } },
+  ];
+  const d = decideMatches(entries, { limit: 5 });
+  assert.equal(d.is_ambiguous, false);
+  assert.equal(d.primary.length, 2);
+});
+
+test('GUARD inisial: gibberish tidak boleh menunggangi inisial target (temuan eval)', () => {
+  // "rcowkymge rbffyivrhj" vs "Dian Fitri R" sempat 0.85 probable karena
+  // kedua token match inisial "r" dengan bobot penuh.
+  const r = conf('rcowkymge rbffyivrhj', 'Dian Fitri R');
+  assert.equal(r.confidence, 'none', `harus none, dapat ${r.confidence} (${r.score})`);
+  // Arah yang sah tetap jalan: user mengetik inisial.
+  const ok = conf('M Rizky Pratama', 'Muhammad Rizky Pratama');
+  assert.ok(['strong', 'exact'].includes(ok.confidence));
+});
+
+test('buildNameQueries: sinonim ikut jadi query server', () => {
+  const qs = buildNameQueries('Muhammad Rizky');
+  assert.ok(qs.includes('muhammad rizky'));
+  assert.ok(qs.some((q) => ['moh', 'muh', 'md'].includes(q)), `varian sinonim tidak ada: ${qs}`);
+});

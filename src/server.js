@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { smartLookup, listOrders } = require('./jubelio');
+const { smartLookup, listOrders, searchOrdersByName, getOrderDetail } = require('./jubelio');
 const { formatOrder } = require('./format');
 
 const app = express();
@@ -59,6 +59,80 @@ app.post('/api/orders/lookup', async (req, res) => {
   }
 });
 
+// Cari order dari nama pemesan ATAU nama penerima di alamat pengiriman.
+// Toleran typo (fuzzy match). GET ?name=... atau POST { "name": "..." }.
+async function handleSearchByName(req, res) {
+  const raw =
+    req.query.name ||
+    req.body?.name ||
+    req.body?.nama ||
+    req.body?.customer_name ||
+    req.body?.shipping_name;
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  if (name.length < 3) {
+    return res.status(400).json({
+      error: 'nama wajib diisi (minimal 3 huruf)',
+      hint: 'GET /api/orders/by-name?name=Komang Rahayu — atau POST body JSON: { "name": "Komang Rahayu" }',
+    });
+  }
+
+  const limit = Math.min(10, Math.max(1, Number(req.query.limit || req.body?.limit) || 5));
+  try {
+    const { primary, alternatives, is_ambiguous, total_found, queries_tried } =
+      await searchOrdersByName(name, { limit });
+    if (!primary.length && !alternatives.length) {
+      return res.status(404).json({
+        error: 'Tidak ada pesanan yang cocok dengan nama tersebut',
+        input: name,
+        queries_tried,
+      });
+    }
+    // Detail lengkap hanya untuk kandidat >= probable; tier weak cukup ringkasan
+    // di alternatives (privacy: jangan bocorkan detail order atas match lemah).
+    const orders = await Promise.all(
+      primary.map(async ({ row, match }) => {
+        const detail = await getOrderDetail(row.salesorder_id);
+        return {
+          match_score: Number(match.score.toFixed(3)),
+          confidence: match.confidence,
+          match_basis: match.basis,
+          matched_name: match.matched_name,
+          shipping_name: row.shipping_full_name || null,
+          ...formatOrder(detail),
+        };
+      }),
+    );
+    return res.json({
+      input: name,
+      total_found,
+      count: orders.length,
+      is_ambiguous,
+      ...(is_ambiguous
+        ? { hint: 'Ada beberapa pelanggan berbeda dengan nama mirip — konfirmasi dulu ke pelanggan sebelum memakai hasil teratas.' }
+        : {}),
+      orders,
+      alternatives: alternatives.map(({ row, match }) => ({
+        match_score: Number(match.score.toFixed(3)),
+        confidence: match.confidence,
+        matched_name: match.matched_name,
+        salesorder_no: row.salesorder_no,
+        channel: row.channel_name || null,
+        transaction_date: row.transaction_date || null,
+      })),
+    });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    return res.status(status >= 400 && status < 600 ? status : 502).json({
+      error: 'Gagal mencari pesanan berdasarkan nama',
+      message: err.message,
+      upstream: err.response?.data,
+    });
+  }
+}
+
+app.get('/api/orders/by-name', handleSearchByName);
+app.post('/api/orders/by-name', handleSearchByName);
+
 app.get('/api/orders/sample', async (req, res) => {
   const status = String(req.query.status || 'completed');
   const q = String(req.query.q || '');
@@ -76,8 +150,15 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Route tidak ditemukan' });
 });
 
-const port = Number(process.env.PORT) || 3000;
-app.listen(port, () => {
-  console.log(`API listening on http://localhost:${port}`);
-  console.log(`POST /api/orders/lookup  body: { "salesorder_no": "<kode pesanan>" }`);
-});
+// Di Vercel app di-export dan HTTP server dikelola platform; listen hanya
+// saat dijalankan langsung (npm start / npm run dev).
+if (require.main === module) {
+  const port = Number(process.env.PORT) || 3000;
+  app.listen(port, () => {
+    console.log(`API listening on http://localhost:${port}`);
+    console.log(`POST /api/orders/lookup  body: { "salesorder_no": "<kode pesanan>" }`);
+    console.log(`GET  /api/orders/by-name?name=<nama pemesan / penerima>  (fuzzy, toleran typo)`);
+  });
+}
+
+module.exports = app;
