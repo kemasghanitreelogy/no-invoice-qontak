@@ -139,12 +139,25 @@ Contoh response sukses:
         }
       ],
       "history": [
-        { "history_id": 1, "history_name": "Dibuat",  "at": "...", "by": "TOKOPEDIA" },
-        { "history_id": 2, "history_name": "Dibayar", "at": "...", "by": "system" },
-        { "history_id": 3, "history_name": "Diambil", "at": "...", "by": "kemas@treelogy.com" },
-        { "history_id": 4, "history_name": "Dikirim", "at": "...", "by": "system" },
-        { "history_id": 5, "history_name": "Selesai", "at": "...", "by": "system" }
+        { "history_id": 1, "history_name": "Dibuat",      "at": "...", "by": "TOKOPEDIA" },
+        { "history_id": 2, "history_name": "Dibayar",     "at": "...", "by": "system" },
+        { "history_id": 3, "history_name": "Diambil",     "at": "...", "by": "kemas@treelogy.com" },
+        { "history_id": 4, "history_name": "Resi dibuat", "at": "...", "by": "system" },
+        { "history_id": 5, "history_name": "Dikirim",     "at": "...", "by": "system" },
+        { "history_id": 6, "history_name": "Selesai",     "at": "...", "by": "system" }
       ]
+
+      Urutan event history yang mungkin muncul:
+        Dibuat -> Dibayar -> Diambil (pick gudang) -> Dikemas ->
+        Resi dibuat (AWB/nomor resi terbit) -> Dikirim (serah ke kurir) ->
+        Diterima -> Selesai   (atau: Dibatalkan / Gagal)
+
+      PENTING — "Resi dibuat" BUKAN berarti paket sudah jalan:
+        Resi/AWB sering terbit lebih dulu saat pesanan masih diproses
+        di gudang. "Dikirim" hanya muncul kalau paket benar-benar sudah
+        diserahkan ke kurir. Contoh nyata: order status PROCESSING,
+        posisi gudang baru "Diambil", resi sudah ada -> last_history =
+        "Resi dibuat" (bukan "Dikirim").
     }
   ]
 }
@@ -251,8 +264,10 @@ LANGKAH 3  Panggil ulang dengan tanggal, apa adanya dari pelanggan:
      lalu cocokkan manual dari daftar orders yang dikembalikan.
 
 LANGKAH 4  Menjawab pelanggan — field yang paling berguna:
-   - status + last_history  : posisi pesanan sekarang ("Dikirim", dsb.)
-   - history                : kronologi lengkap Dibuat->Dibayar->Dikirim...
+   - status + last_history  : posisi pesanan sekarang (utamakan "status";
+                              "last_history" = kejadian terakhir yang punya
+                              tanggal — "Resi dibuat" belum tentu terkirim)
+   - history                : kronologi lengkap Dibuat->Dibayar->...->Dikirim
    - products (name, qty, price) + grand_total : rincian belanja
    - salesorder_no + channel + store : identitas pesanan
    - shipping (address, city, province, courier) : alamat tujuan & kurir —

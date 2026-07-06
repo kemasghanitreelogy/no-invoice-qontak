@@ -210,6 +210,32 @@ test('dates: konversi WIB & selisih hari', () => {
   assert.equal(diffDays(null, '2026-04-17'), null);
 });
 
+test('formatOrder: resi terbit != dikirim (kasus SP-260704SDAT8VAW)', () => {
+  const { formatOrder } = require('../src/format');
+  // Order FINISH_PICK: resi sudah dibuat tapi shipped_date null -> timeline
+  // TIDAK boleh bilang "Dikirim".
+  const o = formatOrder({
+    salesorder_no: 'SP-TEST',
+    internal_status: 'PROCESSING',
+    created_date: '2026-07-04T14:08:45.548Z',
+    payment_date: '2026-07-04T14:09:01.000Z',
+    tn_created_date: '2026-07-06T02:30:36.254Z',
+    items: [{ awb_created_date: '2026-07-06T02:30:36.254Z', shipped_date: null }],
+  });
+  const names = o.history.map((h) => h.history_name);
+  assert.ok(names.includes('Resi dibuat'));
+  assert.ok(!names.includes('Dikirim'));
+  assert.equal(o.status, 'PROCESSING');
+  // Kalau shipped_date terisi, barulah "Dikirim" muncul.
+  const shipped = formatOrder({
+    salesorder_no: 'SP-TEST2',
+    internal_status: 'SHIPPED',
+    created_date: '2026-07-04T14:08:45.548Z',
+    items: [{ awb_created_date: '2026-07-06T02:30:36.254Z', shipped_date: '2026-07-06T05:00:00.000Z' }],
+  });
+  assert.equal(shipped.last_history.history_name, 'Dikirim');
+});
+
 test('buildNameQueries: sinonim ikut jadi query server', () => {
   const qs = buildNameQueries('Muhammad Rizky');
   assert.ok(qs.includes('muhammad rizky'));

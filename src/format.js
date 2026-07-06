@@ -13,12 +13,15 @@ function buildHistory(order) {
   const itemPacked = items.map((it) => it?.pack_scanned_date).find(Boolean) || null;
 
   const events = [
-    { history_name: 'Dibuat',     at: order.created_date,                                          by: pickActor(order.username, order.user_name, order.source_name) },
-    { history_name: 'Dibayar',    at: order.payment_date,                                          by: pickActor(order.username, 'system') },
-    { history_name: 'Diambil',    at: itemPicked || order.tn_created_date,                         by: pickActor(order.picker, order.username) },
-    { history_name: 'Dikemas',    at: itemPacked,                                                  by: pickActor(order.picker, order.username) },
-    { history_name: 'Dikirim',    at: itemAwb || itemShipped,                                      by: 'system' },
-    { history_name: 'Diterima',   at: order.received_date,                                         by: 'system' },
+    { history_name: 'Dibuat',      at: order.created_date,                                         by: pickActor(order.username, order.user_name, order.source_name) },
+    { history_name: 'Dibayar',     at: order.payment_date,                                         by: pickActor(order.username, 'system') },
+    { history_name: 'Diambil',     at: itemPicked || order.tn_created_date,                        by: pickActor(order.picker, order.username) },
+    { history_name: 'Dikemas',     at: itemPacked,                                                 by: pickActor(order.picker, order.username) },
+    // Resi terbit BUKAN berarti paket sudah jalan — jangan dilabeli "Dikirim".
+    // "Dikirim" hanya dari shipped_date asli (serah terima ke kurir).
+    { history_name: 'Resi dibuat', at: itemAwb,                                                    by: 'system' },
+    { history_name: 'Dikirim',     at: itemShipped,                                                by: 'system' },
+    { history_name: 'Diterima',    at: order.received_date,                                        by: 'system' },
     { history_name: 'Dibatalkan', at: order.mp_cancel_date || order.internal_cancel_date,          by: pickActor(order.mp_cancel_by, 'system') },
     { history_name: 'Gagal',      at: order.failed_order_date,                                     by: 'system' },
     { history_name: 'Selesai',    at: order.completed_date || order.mp_completed_date,             by: 'system' },
