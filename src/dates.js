@@ -6,8 +6,8 @@
 //   2026-04-17 · 17/04/2026 · 17-4-26 · 17.04.2026 · 17/4 · "17"
 //   1 januari 2026 · 01 Jan 26 · 17 agustus · tgl 17 april · kemarin/hari ini
 // + toleransi typo nama bulan ("jnauari", "agsutus", "pebruari") via Damerau.
-// Tanpa tahun -> tahun berjalan (WIB); kalau hasilnya di masa depan, mundur
-// setahun/sebulan — tanggal bayar tidak mungkin di masa depan.
+// Tanpa tahun -> tahun berjalan; hanya angka hari -> bulan & tahun berjalan
+// (kalender WIB).
 
 const { damerauLevenshtein } = require('./matching/score');
 
@@ -83,10 +83,6 @@ function todayWib(now) {
   return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
 }
 
-function isFuture(y, m, d, today) {
-  return fmt(y, m, d) > fmt(today.y, today.m, today.d);
-}
-
 // Kata relatif, dengan toleransi typo kecil.
 const RELATIVE = [
   { words: ['hari ini', 'hariini', 'today', 'sekarang', 'skrg'], delta: 0 },
@@ -105,11 +101,9 @@ function parseRelative(s, today) {
   return null;
 }
 
-// Tanpa tahun: pakai tahun berjalan; kalau jatuh di masa depan, mundur setahun.
+// Tanpa tahun: langsung pakai tahun berjalan (WIB).
 function resolveNoYear(m, d, today) {
-  let y = today.y;
-  if (validYmd(y, m, d) && isFuture(y, m, d, today)) y -= 1;
-  return validYmd(y, m, d);
+  return validYmd(today.y, m, d);
 }
 
 function parseDateInput(raw, now = new Date()) {
@@ -151,20 +145,9 @@ function parseDateInput(raw, now = new Date()) {
     return resolveNoYear(mo, d, today);
   }
 
-  // Hanya angka hari ("17"): bulan berjalan; masa depan -> bulan lalu.
+  // Hanya angka hari ("17"): otomatis bulan & tahun berjalan (WIB).
   m = s.match(/^(\d{1,2})$/);
-  if (m) {
-    const d = Number(m[1]);
-    let { y, m: mo } = today;
-    if (validYmd(y, mo, d) && isFuture(y, mo, d, today)) {
-      mo -= 1;
-      if (mo === 0) {
-        mo = 12;
-        y -= 1;
-      }
-    }
-    return validYmd(y, mo, d);
-  }
+  if (m) return validYmd(today.y, today.m, Number(m[1]));
 
   // Format kata: cari token bulan (dengan fuzzy), hari, dan tahun di sekitarnya.
   // Mendukung "1 januari 2026", "januari 1 2026", "1 jan 26", "1 januari".

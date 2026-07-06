@@ -182,11 +182,11 @@ test('dates: parser pintar segala format', () => {
   assert.equal(p('17 agsutus 2025'), '2025-08-17');
   assert.equal(p('5 setember 2025'), '2025-09-05');
 
-  // Tanpa tahun -> tahun berjalan; masa depan -> mundur (payment date pasti lampau)
-  assert.equal(p('1 januari'), '2026-01-01'); // sudah lewat -> tahun ini
-  assert.equal(p('31 desember'), '2025-12-31'); // masa depan -> tahun lalu
+  // Tanpa tahun -> tahun berjalan; hanya hari -> bulan & tahun berjalan
+  assert.equal(p('1 januari'), '2026-01-01');
+  assert.equal(p('31 desember'), '2026-12-31');
   assert.equal(p('17/4'), '2026-04-17');
-  assert.equal(p('17'), '2026-06-17'); // hari 17 bulan ini masa depan -> bulan lalu
+  assert.equal(p('17'), '2026-07-17');
   assert.equal(p('5'), '2026-07-05');
 
   // Relatif
