@@ -60,7 +60,9 @@ app.post('/api/orders/lookup', async (req, res) => {
 });
 
 // Cari order dari nama pemesan ATAU nama penerima di alamat pengiriman.
-// Toleran typo + sinonim. POST body raw JSON: { "name": "...", "limit": 5 }.
+// Toleran typo + sinonim. POST body raw JSON: { "name": "..." }.
+// Jumlah order yang dikembalikan dipatok internal (maks 5, kandidat >= probable).
+const BY_NAME_LIMIT = 5;
 async function handleSearchByName(req, res) {
   const raw =
     req.body?.name ||
@@ -71,11 +73,11 @@ async function handleSearchByName(req, res) {
   if (name.length < 3) {
     return res.status(400).json({
       error: 'nama wajib diisi (minimal 3 huruf)',
-      hint: 'POST body raw JSON: { "name": "Komang Rahayu" } (alias: nama / customer_name / shipping_name), opsional "limit" 1-10',
+      hint: 'POST body raw JSON: { "name": "Komang Rahayu" } (alias: nama / customer_name / shipping_name)',
     });
   }
 
-  const limit = Math.min(10, Math.max(1, Number(req.body?.limit) || 5));
+  const limit = BY_NAME_LIMIT;
   try {
     const { primary, alternatives, is_ambiguous, total_found, queries_tried } =
       await searchOrdersByName(name, { limit });
@@ -134,7 +136,7 @@ app.post('/api/orders/by-name', handleSearchByName);
 app.get('/api/orders/by-name', (_req, res) => {
   res.status(405).json({
     error: 'Gunakan POST dengan body raw JSON',
-    hint: 'POST /api/orders/by-name  body: { "name": "Komang Rahayu", "limit": 5 }',
+    hint: 'POST /api/orders/by-name  body: { "name": "Komang Rahayu" }',
   });
 });
 

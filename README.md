@@ -185,19 +185,13 @@ Cari pesanan dari **nama pemesan** atau **nama penerima di alamat pengiriman** (
 
 Mencakup semua status order (completed, cancel, failed, returned, ready-to-pick/process/ship, shipped, dll.). Detail order lengkap hanya diberikan untuk kandidat ber-tier ≥ `probable`; tier `weak` cuma muncul ringkas di `alternatives` (privasi).
 
-**Input** — hanya POST dengan body raw JSON (GET dijawab `405`):
+**Input** — hanya POST dengan body raw JSON (GET dijawab `405`). Satu-satunya field: `name` (alias diterima: `nama` / `customer_name` / `shipping_name`), minimal 3 huruf. Jumlah hasil dipatok internal maksimal 5 order:
 
 ```bash
-# alias field: name / nama / customer_name / shipping_name
 curl -X POST http://localhost:3000/api/orders/by-name \
   -H 'Content-Type: application/json' \
-  -d '{"name": "Fenny Oey", "limit": 2}'
+  -d '{"name": "Fenny Oey"}'
 ```
-
-| Field body | Tipe | Default | Keterangan |
-|---|---|---|---|
-| `name` | string | — | Wajib, minimal 3 huruf |
-| `limit` | int | `5` | Max 10 order yang dikembalikan |
 
 **Response 200** — tiap order berisi detail lengkap (produk, harga, history) sama seperti `/api/orders/lookup`, plus metadata kecocokan:
 
