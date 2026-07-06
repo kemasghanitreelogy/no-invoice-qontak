@@ -173,7 +173,7 @@ History otomatis di-skip jika field-nya null, dan di-sort ascending berdasarkan 
 
 ---
 
-### `GET /api/orders/by-name` / `POST /api/orders/by-name`
+### `POST /api/orders/by-name`
 
 Cari pesanan dari **nama pemesan** atau **nama penerima di alamat pengiriman** (`shipping_full_name`). Engine matching v2 (lihat `docs/design-name-matching.md`):
 
@@ -185,19 +185,16 @@ Cari pesanan dari **nama pemesan** atau **nama penerima di alamat pengiriman** (
 
 Mencakup semua status order (completed, cancel, failed, returned, ready-to-pick/process/ship, shipped, dll.). Detail order lengkap hanya diberikan untuk kandidat ber-tier ≥ `probable`; tier `weak` cuma muncul ringkas di `alternatives` (privasi).
 
-**Input** (salah satu):
+**Input** — hanya POST dengan body raw JSON (GET dijawab `405`):
 
 ```bash
-# GET query param
-curl 'http://localhost:3000/api/orders/by-name?name=Komanng%20Rahayu&limit=3'
-
-# POST body JSON (alias field: name / nama / customer_name / shipping_name)
+# alias field: name / nama / customer_name / shipping_name
 curl -X POST http://localhost:3000/api/orders/by-name \
   -H 'Content-Type: application/json' \
   -d '{"name": "Fenny Oey", "limit": 2}'
 ```
 
-| Param | Tipe | Default | Keterangan |
+| Field body | Tipe | Default | Keterangan |
 |---|---|---|---|
 | `name` | string | — | Wajib, minimal 3 huruf |
 | `limit` | int | `5` | Max 10 order yang dikembalikan |
