@@ -225,8 +225,14 @@ ATURAN UNTUK BOT CS:
 
 5. RESPONSE ERROR
 =====================================================================
-400  { "error": "nama wajib diisi (minimal 3 huruf)", "hint": "..." }
-     -> body tidak punya name / terlalu pendek.
+400  { "error": "nama wajib diisi (minimal 3 huruf)", "hint": "...",
+       "received": { "content_type": "...", "body_keys": [...] } }
+     -> body tidak punya name / terlalu pendek. Field "received" adalah
+        DIAGNOSA: menunjukkan apa yang benar-benar diterima server
+        (Content-Type & key body) — cek ini dulu kalau integrasi
+        (mis. Qontak) dapat 400 padahal merasa sudah kirim name.
+        Catatan: server toleran — body JSON tetap dibaca walau
+        Content-Type salah/kosong, form-urlencoded juga diterima.
 
 400  { "error": "format tanggal tidak dikenali", "hint": "..." }
      -> date benar-benar tidak bisa diparse (contoh: "besok lusa entah").
