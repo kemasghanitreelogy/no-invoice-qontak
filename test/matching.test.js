@@ -155,6 +155,20 @@ test('GUARD inisial: gibberish tidak boleh menunggangi inisial target (temuan ev
   assert.ok(['strong', 'exact'].includes(ok.confidence));
 });
 
+test('dates: parse input & konversi WIB', () => {
+  const { parseDateInput, wibDateOf, diffDays } = require('../src/dates');
+  assert.equal(parseDateInput('2026-04-17'), '2026-04-17');
+  assert.equal(parseDateInput('17/04/2026'), '2026-04-17');
+  assert.equal(parseDateInput('17-4-2026'), '2026-04-17');
+  assert.equal(parseDateInput('31/02/2026'), null);
+  assert.equal(parseDateInput('kemarin'), null);
+  // 16 Apr 22:03 UTC = 17 Apr 05:03 WIB — pembandingan harus pakai WIB
+  assert.equal(wibDateOf('2026-04-16T22:03:39.000Z'), '2026-04-17');
+  assert.equal(wibDateOf('2026-04-16T10:00:00.000Z'), '2026-04-16');
+  assert.equal(diffDays('2026-04-16', '2026-04-17'), 1);
+  assert.equal(diffDays(null, '2026-04-17'), null);
+});
+
 test('buildNameQueries: sinonim ikut jadi query server', () => {
   const qs = buildNameQueries('Muhammad Rizky');
   assert.ok(qs.includes('muhammad rizky'));

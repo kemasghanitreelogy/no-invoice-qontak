@@ -107,10 +107,20 @@ function matchRow(queryNorm, row) {
 
 // Decision policy atas kandidat terkumpul.
 // entries: [{ row, match }] — match hasil matchRow.
-function decideMatches(entries, { limit = 5 } = {}) {
+// targetDate ("YYYY-MM-DD", opsional): tiebreak — skor sama, order yang
+// transaction_date-nya dekat tanggal itu menang. Verifikasi payment_date
+// sesungguhnya terjadi di layer server setelah detail di-fetch (payment_date
+// tidak tersedia di row list Jubelio).
+function decideMatches(entries, { limit = 5, targetDate = null } = {}) {
+  const { wibDateOf, diffDays } = require('../dates');
+  const dateGap = (e) => {
+    const d = diffDays(wibDateOf(e.row.transaction_date), targetDate);
+    return d === null ? Number.MAX_SAFE_INTEGER : Math.abs(d);
+  };
   const ranked = [...entries].sort(
     (a, b) =>
       b.match.score - a.match.score ||
+      (targetDate ? dateGap(a) - dateGap(b) : 0) ||
       new Date(b.row.transaction_date || 0) - new Date(a.row.transaction_date || 0),
   );
 

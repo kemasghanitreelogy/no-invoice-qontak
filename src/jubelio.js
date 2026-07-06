@@ -182,7 +182,7 @@ async function smartLookup(rawInput) {
 // Engine v2 (docs/design-name-matching.md): toleran typo + sinonim/ejaan lama,
 // dengan decision policy eksplisit (tier confidence + ambiguity margin) supaya
 // tidak pernah percaya diri pada match yang meragukan.
-async function searchOrdersByName(name, { limit = 5 } = {}) {
+async function searchOrdersByName(name, { limit = 5, targetDate = null } = {}) {
   const queryNorm = normalizeName(name);
   const queries = buildNameQueries(name);
   const tried = [];
@@ -211,13 +211,13 @@ async function searchOrdersByName(name, { limit = 5 } = {}) {
       }
       // Early-stop hanya jika kandidat kuat sudah cukup DAN tidak ambigu —
       // kalau ambigu kita justru butuh lebih banyak bukti dari query berikutnya.
-      const { primary, is_ambiguous } = decideMatches([...byId.values()], { limit });
+      const { primary, is_ambiguous } = decideMatches([...byId.values()], { limit, targetDate });
       const strong = primary.filter((e) => ['exact', 'strong'].includes(e.match.confidence));
       if (strong.length >= limit && !is_ambiguous) break;
     }
   });
 
-  const decision = decideMatches([...byId.values()], { limit });
+  const decision = decideMatches([...byId.values()], { limit, targetDate });
   return { queries_tried: tried, ...decision };
 }
 

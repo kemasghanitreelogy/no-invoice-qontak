@@ -183,15 +183,22 @@ Cari pesanan dari **nama pemesan** atau **nama penerima di alamat pengiriman** (
 - **Deteksi ambiguitas** — jika dua pelanggan *berbeda* punya skor berimpit (selisih < 0.05), response menyertakan `is_ambiguous: true` + `hint`; jangan auto-pick.
 - **Nama ter-masking marketplace** (`S***n L***n`) hanya bisa jadi kandidat `masked_possible` (skor cap 0.75), tidak pernah dipilih dengan yakin.
 
-Mencakup semua status order (completed, cancel, failed, returned, ready-to-pick/process/ship, shipped, dll.). Detail order lengkap hanya diberikan untuk kandidat ber-tier ≥ `probable`; tier `weak` cuma muncul ringkas di `alternatives` (privasi).
+Mencakup semua status order (completed, cancel, failed, returned, ready-to-pick/process/ship, shipped, dll.). Hanya kandidat ber-tier ≥ `probable` yang dikembalikan; match `weak` dibuang (privasi — match lemah tidak pernah membuka detail order).
 
-**Input** — hanya POST dengan body raw JSON (GET dijawab `405`). Satu-satunya field: `name` (alias diterima: `nama` / `customer_name` / `shipping_name`), minimal 3 huruf. Jumlah hasil dipatok internal maksimal 5 order:
+**Input** — hanya POST dengan body raw JSON (GET dijawab `405`). Jumlah hasil dipatok internal maksimal 5 order:
 
 ```bash
 curl -X POST http://localhost:3000/api/orders/by-name \
   -H 'Content-Type: application/json' \
-  -d '{"name": "Fenny Oey"}'
+  -d '{"name": "Fenny Oey", "date": "17/04/2026"}'
 ```
+
+| Field body | Wajib? | Keterangan |
+|---|---|---|
+| `name` | ya | Min 3 huruf. Alias: `nama` / `customer_name` / `shipping_name` |
+| `date` | tidak | **Tanggal bayar** (payment date) versi pelanggan/WIB, untuk menaikkan akurasi. Format `YYYY-MM-DD` atau `DD/MM/YYYY`. Alias: `tanggal` / `payment_date` |
+
+Jika `date` diisi: tiap order diberi `date_match` (payment_date order, dikonversi UTC→WIB, cocok ±1 hari), hasil diurut dari yang tanggalnya paling dekat, dan bila hasil tadinya ambigu tapi hanya **satu** pelanggan yang tanggal bayarnya cocok, ambiguitas dipecahkan otomatis (`resolved_by_date: true`).
 
 **Response 200** — tiap order berisi detail lengkap (produk, harga, history) sama seperti `/api/orders/lookup`, plus metadata kecocokan:
 
@@ -216,10 +223,6 @@ curl -X POST http://localhost:3000/api/orders/by-name \
       "products": [ { "name": "...", "qty": 1, "price": 790000, "subtotal": 790000 } ],
       "history": [ { "history_name": "Dibuat", "at": "..." } ]
     }
-  ],
-  "alternatives": [
-    { "match_score": 0.554, "confidence": "weak", "matched_name": "Ni Komang Sukereni",
-      "salesorder_no": "SHF-7695-128887", "channel": "SHOPIFY", "transaction_date": "..." }
   ]
 }
 ```
