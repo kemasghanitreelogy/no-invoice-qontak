@@ -51,6 +51,27 @@ function formatOrder(order) {
   });
   const history = buildHistory(order);
   const last_history = history.length ? history[history.length - 1] : null;
+
+  // Jubelio tidak selalu menyediakan timestamp untuk kejadian retur/batal,
+  // sehingga status bisa lebih baru daripada last_history (mis. status
+  // RETURNED tapi timeline berhenti di "Dikirim"). status_note menjelaskan
+  // itu supaya pembaca (bot CS) tidak salah mengira paket masih jalan.
+  const status = order.internal_status || order.wms_status || order.channel_status || null;
+  const statusUpper = String(status || '').toUpperCase();
+  let status_note = null;
+  if (statusUpper.includes('RETURN')) {
+    status_note =
+      'Order berstatus RETURNED (proses retur/pengembalian, ditandai marketplace mis. TO_RETURN). ' +
+      'Tanggal kejadian retur tidak tersedia dari Jubelio, jadi timeline history bisa berhenti di "Dikirim". ' +
+      'Detail alasan retur cek di Seller Center marketplace / menu Returned di Jubelio.';
+  } else if (statusUpper.includes('CANCEL') && !history.some((h) => h.history_name === 'Dibatalkan')) {
+    status_note =
+      'Order berstatus CANCELLED tetapi tanggal pembatalan tidak tersedia dari Jubelio, ' +
+      'jadi timeline history tidak memuat kejadian "Dibatalkan".';
+  } else if (statusUpper.includes('FAILED') && !history.some((h) => h.history_name === 'Gagal')) {
+    status_note = 'Order berstatus FAILED tetapi tanggal kejadian gagal tidak tersedia dari Jubelio.';
+  }
+
   return {
     salesorder_no: order.salesorder_no,
     ref_no: order.ref_no || null,
@@ -68,7 +89,8 @@ function formatOrder(order) {
       country: order.shipping_country || null,
       courier: order.shipper || null,
     },
-    status: order.internal_status || order.wms_status || order.channel_status || null,
+    status,
+    ...(status_note ? { status_note } : {}),
     transaction_date: order.transaction_date || null,
     last_history,
     grand_total: order.grand_total != null ? Number(order.grand_total) : null,

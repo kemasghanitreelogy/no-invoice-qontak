@@ -121,7 +121,9 @@ Contoh response sukses:
         "country": "Indonesia",
         "courier": "Grab INSTANT"         <- kurir/ekspedisi yang dipakai
       },
-      "status": "COMPLETED",
+      "status": "COMPLETED",       <- posisi pesanan terkini (lihat bag. 4b)
+                                      ("status_note" muncul bila status &
+                                       timeline tidak sinkron, mis. RETURNED)
       "transaction_date": "2026-04-16T22:02:59.000Z",
       "grand_total": 790000,
       "last_history": { "history_name": "Selesai", "at": "...", "by": "system" },
@@ -163,6 +165,49 @@ CATATAN PENTING:
     dikembalikan (maks 5).
   - Hasil selalu diurutkan: paling cocok dulu; kalau ada "date",
     yang tanggal bayarnya paling dekat naik ke atas.
+
+
+4b. MEMAHAMI FIELD "status" (dan field baru "status_note")
+=====================================================================
+"status" diambil langsung dari Jubelio (internal_status), yang
+menyalin status marketplace. Nilai yang umum:
+
+  PROCESSING / READY_TO_SHIP  Sedang diproses / siap kirim
+  SHIPPED                     Dalam pengiriman
+  COMPLETED                   Selesai (diterima pembeli)
+  CANCELLED                   Dibatalkan
+  FAILED                      Gagal (mis. pembayaran tidak masuk)
+  RETURNED                    Proses retur / pengembalian
+
+KASUS KHUSUS — status RETURNED tapi last_history "Dikirim":
+  Ini BUKAN error. Contoh nyata: order Shopee dikirim 18 Juni, lalu
+  pembeli mengajukan pengembalian (Shopee menandai TO_RETURN) atau
+  paket gagal terkirim dan kembali ke penjual (RTS). Jubelio mengubah
+  status jadi RETURNED, TAPI tidak menyediakan TANGGAL kejadian
+  retur — sehingga timeline history berhenti di kejadian terakhir
+  yang punya tanggal ("Dikirim").
+
+  Supaya tidak salah baca, response otomatis menambahkan field
+  "status_note" pada kasus seperti ini, contoh:
+
+  "status": "RETURNED",
+  "status_note": "Order berstatus RETURNED (proses retur/pengembalian,
+    ditandai marketplace mis. TO_RETURN). Tanggal kejadian retur tidak
+    tersedia dari Jubelio, jadi timeline history bisa berhenti di
+    'Dikirim'. Detail alasan retur cek di Seller Center marketplace /
+    menu Returned di Jubelio.",
+
+  "status_note" juga muncul untuk CANCELLED/FAILED yang tanggal
+  kejadiannya tidak tersedia. Kalau tidak ada anomali, field ini
+  TIDAK muncul sama sekali.
+
+ATURAN UNTUK BOT CS:
+  - SELALU utamakan "status" dibanding "last_history" saat menjawab
+    posisi pesanan. "last_history" = kejadian terakhir YANG PUNYA
+    TANGGAL, bukan selalu kondisi terkini.
+  - Jika ada "status_note", sampaikan intinya ke pelanggan (mis.
+    "pesanan tercatat dalam proses retur") dan arahkan detail alasan
+    retur ke marketplace.
 
 
 5. RESPONSE ERROR
