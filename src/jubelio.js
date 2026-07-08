@@ -82,25 +82,35 @@ const SEARCH_PATHS = [
   '/wms/sales/packlists/finish-pack/',
 ];
 
+// Match nomor order harus di BATAS token, bukan substring bebas: "19024"
+// TIDAK boleh kena di tengah "TP-584133351608190245-..." (insiden nyata:
+// nomor invoice QuickBooks 19024 mengembalikan order Tokopedia acak).
+function boundedMatch(haystack, needle) {
+  const h = String(haystack || '');
+  if (!h) return false;
+  if (h === needle) return true;
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![a-zA-Z0-9])${esc}(?![a-zA-Z0-9])`).test(h);
+}
+
 function pickFromRows(rows, { stems = [], candidates = [], query = '' } = {}) {
   if (!rows.length) return null;
-  const exact = rows.find((r) => r?.salesorder_no && candidates.includes(r.salesorder_no));
+  const q = String(query || '').trim();
+  const needle = q.startsWith('#') ? q.slice(1) : q;
+  const exact = rows.find(
+    (r) => (r?.salesorder_no && candidates.includes(r.salesorder_no)) || (needle && r?.ref_no === needle),
+  );
   if (exact) return exact;
   if (stems.length) {
     const stemHit = rows.find((r) => r?.salesorder_no && stems.some((p) => r.salesorder_no.startsWith(p)));
     if (stemHit) return stemHit;
   }
-  // Hanya terima baris yang salesorder_no / ref_no-nya benar-benar mengandung query.
   // JANGAN asal ambil baris pertama: endpoint Jubelio bisa mengembalikan daftar
   // order walau query tidak match, dan itu memunculkan order yang salah.
-  const q = String(query || '').trim();
-  if (q.length >= 4) {
-    const needle = q.startsWith('#') ? q.slice(1) : q;
-    const contains = rows.find((r) => {
-      const no = String(r?.salesorder_no || '');
-      const ref = String(r?.ref_no || '');
-      return no.includes(needle) || ref.includes(needle);
-    });
+  if (needle.length >= 4) {
+    const contains = rows.find(
+      (r) => boundedMatch(r?.salesorder_no, needle) || boundedMatch(r?.ref_no, needle),
+    );
     if (contains) return contains;
   }
   return null;
@@ -108,19 +118,25 @@ function pickFromRows(rows, { stems = [], candidates = [], query = '' } = {}) {
 
 async function trySearchByQuery(query, opts = {}) {
   return withAuth(async (token) => {
+    let anySuccess = false;
+    let lastFailure = null;
     for (const path of SEARCH_PATHS) {
       try {
         const { data } = await http.get(path, {
           params: { q: query, pageSize: 100 },
           headers: authHeaders(token),
         });
+        anySuccess = true;
         const rows = Array.isArray(data?.data) ? data.data : [];
         const hit = pickFromRows(rows, { ...opts, query });
         if (hit) return { salesorder_id: hit.salesorder_id, matched: hit.salesorder_no || query, via: path };
       } catch (err) {
         if (err.response?.status === 401) throw err;
+        lastFailure = err;
       }
     }
+    // Semua path gagal = gangguan upstream, bukan "tidak ditemukan".
+    if (!anySuccess) throw lastFailure || new Error('Semua permintaan pencarian ke Jubelio gagal');
     return null;
   });
 }
@@ -187,21 +203,27 @@ async function searchOrdersByName(name, { limit = 5, targetDate = null } = {}) {
   const queries = buildNameQueries(name);
   const tried = [];
   const byId = new Map();
+  // Kalau SEMUA request ke Jubelio gagal, itu gangguan upstream — WAJIB jadi
+  // error 5xx, bukan "pesanan tidak ditemukan" (data akurat > jawaban cepat).
+  let anySuccess = false;
+  let lastFailure = null;
 
   await withAuth(async (token) => {
     for (const q of queries) {
       tried.push(q);
       const results = await Promise.allSettled(
         SEARCH_PATHS.map((path) =>
-          http.get(path, { params: { q, pageSize: 50 }, headers: authHeaders(token) }),
+          http.get(path, { params: { q, pageSize: 100 }, headers: authHeaders(token) }),
         ),
       );
       for (const r of results) {
         if (r.status === 'rejected') {
           // 401 dilempar keluar supaya withAuth refresh token & retry.
           if (r.reason?.response?.status === 401) throw r.reason;
+          lastFailure = r.reason;
           continue;
         }
+        anySuccess = true;
         const rows = Array.isArray(r.value.data?.data) ? r.value.data.data : [];
         for (const row of rows) {
           if (!row?.salesorder_id || byId.has(row.salesorder_id)) continue;
@@ -216,6 +238,10 @@ async function searchOrdersByName(name, { limit = 5, targetDate = null } = {}) {
       if (strong.length >= limit && !is_ambiguous) break;
     }
   });
+
+  if (!anySuccess) {
+    throw lastFailure || new Error('Semua permintaan pencarian ke Jubelio gagal');
+  }
 
   const decision = decideMatches([...byId.values()], { limit, targetDate });
   return { queries_tried: tried, ...decision };
@@ -256,4 +282,6 @@ module.exports = {
   trySearchByQuery,
   listOrders,
   searchOrdersByName,
+  pickFromRows,
+  boundedMatch,
 };

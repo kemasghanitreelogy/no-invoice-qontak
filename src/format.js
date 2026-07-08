@@ -22,10 +22,18 @@ function buildHistory(order) {
     { history_name: 'Resi dibuat', at: itemAwb,                                                    by: 'system' },
     { history_name: 'Dikirim',     at: itemShipped,                                                by: 'system' },
     { history_name: 'Diterima',    at: order.received_date,                                        by: 'system' },
-    { history_name: 'Dibatalkan', at: order.mp_cancel_date || order.internal_cancel_date,          by: pickActor(order.mp_cancel_by, 'system') },
+    // Kolom tanggal Jubelio tidak selalu mencerminkan kondisi akhir order:
     // failed_order_date bisa terisi walau order akhirnya PAID (gagal sinkron
-    // sesaat lalu pulih — kasus SHF-8506-128887). Tampilkan "Gagal" hanya
-    // jika status order memang FAILED.
+    // sesaat lalu pulih — kasus SHF-8506-128887), dan tanggal cancel bisa
+    // terisi saat pembeli cuma MENGAJUKAN batal lalu ditolak. Event batal/
+    // gagal hanya ditampilkan jika status akhir order memang begitu.
+    {
+      history_name: 'Dibatalkan',
+      at: String(order.internal_status || '').toUpperCase().includes('CANCEL')
+        ? order.mp_cancel_date || order.internal_cancel_date
+        : null,
+      by: pickActor(order.mp_cancel_by, 'system'),
+    },
     {
       history_name: 'Gagal',
       at: String(order.internal_status || '').toUpperCase().includes('FAILED')
@@ -51,14 +59,20 @@ function formatOrder(order) {
     // harga listing channel SEBELUM diskon (mis. Tokopedia 940rb -> net 790rb).
     const unitPrice = num(it.sell_price ?? it.original_price);
     const subtotal = it.amount != null ? num(it.amount) : unitPrice * qty;
+    // Diskon order-level (add_disc / voucher) dialokasikan Jubelio langsung ke
+    // `amount` tanpa mengisi disc_amount — turunkan dari selisih supaya angka
+    // baris SELALU konsisten: price*qty - discount = subtotal.
+    // (Kasus nyata: harga 690rb, subtotal 565rb, disc_amount 0 -> diskon 125rb.)
+    const itemDisc = num(it.disc_amount);
+    const derivedDisc = Math.max(0, unitPrice * qty - subtotal);
     return {
       name: it.item_name || it.description || it.item_code || '(tanpa nama)',
       sku: it.item_code || null,
       qty,
       price: unitPrice,                 // harga net per unit (sesuai katalog)
       list_price: num(it.price),        // harga gross channel sebelum diskon
-      discount: num(it.disc_amount),    // nominal diskon per baris
-      subtotal,                         // total net baris (qty x net), = amount
+      discount: itemDisc || derivedDisc, // nominal diskon efektif baris ini
+      subtotal,                         // total net baris yang benar2 dibayar
     };
   });
   const history = buildHistory(order);
@@ -103,9 +117,23 @@ function formatOrder(order) {
     },
     status,
     ...(status_note ? { status_note } : {}),
+    // Status bayar eksplisit — jangan disimpulkan dari history (Shopify sering
+    // tidak mengisi payment_date walau order lunas).
+    is_paid: order.is_paid === true,
+    payment_date: order.payment_date || null,
     transaction_date: order.transaction_date || null,
     last_history,
     grand_total: order.grand_total != null ? Number(order.grand_total) : null,
+    // Rincian uang order-level supaya total selalu bisa dijelaskan:
+    // sub_total - other_discount + shipping_cost (net) ~= grand_total.
+    totals: {
+      sub_total: num(order.sub_total),                    // total harga produk
+      other_discount: num(order.add_disc),                // diskon lainnya/voucher order-level
+      shipping_cost: num(order.shipping_cost),            // ongkir dibayar pembeli
+      shipping_discount: num(order.shipping_cost_discount),
+      insurance: num(order.insurance_cost),
+      grand_total: order.grand_total != null ? Number(order.grand_total) : null,
+    },
     products,
     history,
   };

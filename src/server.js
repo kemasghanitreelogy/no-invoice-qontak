@@ -3,6 +3,7 @@ const express = require('express');
 const { smartLookup, listOrders, searchOrdersByName, getOrderDetail } = require('./jubelio');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
+const { normalizeName } = require('./matching');
 
 const app = express();
 
@@ -174,16 +175,23 @@ async function handleSearchByName(req, res) {
     let orders = await Promise.all(
       primary.map(async ({ row, match }) => {
         const detail = await getOrderDetail(row.salesorder_id);
-        const paymentDate = detail.payment_date || null;
-        const diff = targetDate ? diffDays(wibDateOf(paymentDate), targetDate) : null;
+        // Shopify sering tidak mengisi payment_date walau lunas — untuk
+        // pencocokan tanggal, order lunas fallback ke transaction_date
+        // (checkout Shopify = bayar saat itu juga).
+        const payRef = detail.payment_date || (detail.is_paid ? detail.transaction_date : null);
+        const diff = targetDate ? diffDays(wibDateOf(payRef), targetDate) : null;
         return {
           match_score: Number(match.score.toFixed(3)),
           confidence: match.confidence,
           match_basis: match.basis,
           matched_name: match.matched_name,
           shipping_name: row.shipping_full_name || null,
-          payment_date: paymentDate,
-          ...(targetDate ? { date_match: diff !== null && Math.abs(diff) <= DATE_TOLERANCE_DAYS } : {}),
+          ...(targetDate
+            ? {
+                date_match: diff !== null && Math.abs(diff) <= DATE_TOLERANCE_DAYS,
+                date_basis: detail.payment_date ? 'payment_date' : payRef ? 'transaction_date' : null,
+              }
+            : {}),
           ...formatOrder(detail),
         };
       }),
@@ -192,21 +200,24 @@ async function handleSearchByName(req, res) {
     let ambiguous = is_ambiguous;
     let resolved_by_date = false;
     if (targetDate) {
-      // Order yang payment_date-nya cocok naik ke atas.
+      // Order yang tanggal bayarnya cocok naik ke atas.
       const gap = (o) => {
-        const d = diffDays(wibDateOf(o.payment_date), targetDate);
+        const ref = o.payment_date || (o.is_paid ? o.transaction_date : null);
+        const d = diffDays(wibDateOf(ref), targetDate);
         return d === null ? Number.MAX_SAFE_INTEGER : Math.abs(d);
       };
       orders.sort((a, b) => gap(a) - gap(b) || b.match_score - a.match_score);
       // Tanggal bayar memecah ambiguitas hanya jika TEPAT SATU pelanggan
       // yang tanggalnya cocok — kalau dua-duanya cocok, tetap ambigu.
+      // Identitas orang pakai normalizeName (konsisten dgn decideMatches):
+      // "| Komang Budiasa" dan "Komang Budiasa" adalah orang yang sama.
       if (ambiguous) {
         const matchedPersons = new Set(
-          orders.filter((o) => o.date_match).map((o) => (o.matched_name || '').toLowerCase().trim()),
+          orders.filter((o) => o.date_match).map((o) => normalizeName(o.matched_name || '')),
         );
         if (matchedPersons.size === 1) {
           const person = [...matchedPersons][0];
-          orders = orders.filter((o) => (o.matched_name || '').toLowerCase().trim() === person);
+          orders = orders.filter((o) => normalizeName(o.matched_name || '') === person);
           ambiguous = false;
           resolved_by_date = true;
         }

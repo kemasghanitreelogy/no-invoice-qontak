@@ -259,6 +259,59 @@ test('formatOrder: failed_order_date pada order PAID tidak jadi event Gagal (kas
   assert.ok(failed.history.some((h) => h.history_name === 'Gagal'));
 });
 
+test('boundedMatch: nomor pendek tidak boleh kena di tengah nomor panjang (insiden 19024)', () => {
+  const { boundedMatch, pickFromRows } = require('../src/jubelio');
+  assert.equal(boundedMatch('TP-584133351608190245-128884', '19024'), false);
+  assert.equal(boundedMatch('SHF-8506-128887', '8506'), true); // batas token "-"
+  assert.equal(boundedMatch('SP-260417271TRC55', '260417271TRC55'), true);
+  const rows = [
+    { salesorder_id: 1, salesorder_no: 'TP-584133351608190245-128884', ref_no: '584133351608190245' },
+  ];
+  assert.equal(pickFromRows(rows, { query: '19024' }), null);
+  assert.ok(pickFromRows(rows, { query: '584133351608190245' }));
+});
+
+test('formatOrder: diskon order-level diturunkan supaya angka baris konsisten (kasus 125rb)', () => {
+  const { formatOrder } = require('../src/format');
+  const o = formatOrder({
+    salesorder_no: 'SHF-8506-128887',
+    internal_status: 'PAID',
+    is_paid: true,
+    sub_total: '690000.0000',
+    add_disc: '125000.0000',
+    shipping_cost: '25000.0000',
+    grand_total: '590000.0000',
+    items: [{ item_name: 'Kapsul', qty: 1, price: '690000.0000', sell_price: '690000.0000', disc_amount: 0, amount: '565000.0000' }],
+  });
+  const p = o.products[0];
+  assert.equal(p.discount, 125000);
+  assert.equal(p.price * p.qty - p.discount, p.subtotal); // selalu konsisten
+  assert.equal(o.is_paid, true);
+  assert.equal(o.totals.other_discount, 125000);
+  assert.equal(o.totals.sub_total - o.totals.other_discount + o.totals.shipping_cost, o.totals.grand_total);
+});
+
+test('formatOrder: tanggal cancel pada order non-cancel tidak jadi event Dibatalkan', () => {
+  const { formatOrder } = require('../src/format');
+  // Pembeli mengajukan batal lalu ditolak -> mp_cancel_date terisi, status tetap jalan.
+  const o = formatOrder({
+    salesorder_no: 'SP-X',
+    internal_status: 'PROCESSING',
+    created_date: '2026-07-01T00:00:00Z',
+    mp_cancel_date: '2026-07-02T00:00:00Z',
+    items: [],
+  });
+  assert.ok(!o.history.some((h) => h.history_name === 'Dibatalkan'));
+  const cancelled = formatOrder({
+    salesorder_no: 'SP-Y',
+    internal_status: 'CANCELLED',
+    created_date: '2026-07-01T00:00:00Z',
+    mp_cancel_date: '2026-07-02T00:00:00Z',
+    items: [],
+  });
+  assert.ok(cancelled.history.some((h) => h.history_name === 'Dibatalkan'));
+});
+
 test('buildNameQueries: sinonim ikut jadi query server', () => {
   const qs = buildNameQueries('Muhammad Rizky');
   assert.ok(qs.includes('muhammad rizky'));

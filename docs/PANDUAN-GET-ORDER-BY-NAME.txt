@@ -103,8 +103,13 @@ Contoh response sukses:
       "match_basis": "customer",    <- match di nama pemesan / "shipping" (penerima)
       "matched_name": "Komang Rahayu Lestari",
       "shipping_name": "Komang Rahayu Lestari",
+      "is_paid": true,              <- status bayar EKSPLISIT (sumber kebenaran
+                                       pembayaran; jangan simpulkan dari history)
       "payment_date": "2026-04-16T22:03:39.000Z",   <- UTC (= 17 Apr WIB)
       "date_match": true,           <- hanya ada jika date dikirim; cocok +/-1 hari
+      "date_basis": "payment_date", <- dasar pencocokan tanggal; order Shopify
+                                       lunas tanpa payment_date otomatis pakai
+                                       "transaction_date" (checkout = bayar)
       "salesorder_no": "TP-583564250368280183-128884",
       "ref_no": "583564250368280183",
       "channel": "TOKOPEDIA",
@@ -126,6 +131,14 @@ Contoh response sukses:
                                        timeline tidak sinkron, mis. RETURNED)
       "transaction_date": "2026-04-16T22:02:59.000Z",
       "grand_total": 790000,
+      "totals": {                   <- RINCIAN UANG order-level, selalu konsisten:
+        "sub_total": 790000,           sub_total - other_discount + shipping_cost
+        "other_discount": 0,           ~= grand_total
+        "shipping_cost": 0,         <- ongkir yang dibayar pembeli
+        "shipping_discount": 0,
+        "insurance": 0,
+        "grand_total": 790000
+      },
       "last_history": { "history_name": "Selesai", "at": "...", "by": "system" },
       "products": [
         {
@@ -134,8 +147,10 @@ Contoh response sukses:
           "qty": 1,
           "price": 790000,          <- harga NET per unit (sesuai katalog)
           "list_price": 940000,     <- harga coret channel sebelum diskon
-          "discount": 150000,
-          "subtotal": 790000
+          "discount": 150000,       <- diskon EFEKTIF baris (termasuk alokasi
+                                       voucher order-level); dijamin:
+                                       price x qty - discount = subtotal
+          "subtotal": 790000        <- nominal yang benar-benar dibayar utk baris ini
         }
       ],
       "history": [
@@ -245,6 +260,9 @@ ATURAN UNTUK BOT CS:
 405  -> dipanggil dengan GET. Gunakan POST body raw JSON.
 
 502/5xx -> gangguan upstream Jubelio; coba ulang beberapa saat.
+     Catatan akurasi: kalau Jubelio sedang down, API mengembalikan 5xx —
+     TIDAK PERNAH pura-pura "pesanan tidak ditemukan". 404 selalu berarti
+     pencarian benar-benar berjalan dan namanya memang tidak ada.
 
 
 6. RESEP "GET ORDER DENGAN CANGGIH" — ALUR UNTUK BOT CS / AGENT
