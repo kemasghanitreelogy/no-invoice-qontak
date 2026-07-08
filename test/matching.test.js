@@ -236,6 +236,29 @@ test('formatOrder: resi terbit != dikirim (kasus SP-260704SDAT8VAW)', () => {
   assert.equal(shipped.last_history.history_name, 'Dikirim');
 });
 
+test('formatOrder: failed_order_date pada order PAID tidak jadi event Gagal (kasus SHF-8506-128887)', () => {
+  const { formatOrder } = require('../src/format');
+  const paid = formatOrder({
+    salesorder_no: 'SHF-TEST',
+    internal_status: 'PAID',
+    is_paid: true,
+    created_date: '2026-07-07T09:00:21.067Z',
+    failed_order_date: '2026-07-07T09:00:22.125Z',
+    items: [],
+  });
+  assert.ok(!paid.history.some((h) => h.history_name === 'Gagal'));
+  assert.equal(paid.status, 'PAID');
+  // Order yang memang FAILED tetap menampilkan event Gagal.
+  const failed = formatOrder({
+    salesorder_no: 'SHF-TEST2',
+    internal_status: 'FAILED',
+    created_date: '2026-07-07T09:00:21.067Z',
+    failed_order_date: '2026-07-07T09:00:22.125Z',
+    items: [],
+  });
+  assert.ok(failed.history.some((h) => h.history_name === 'Gagal'));
+});
+
 test('buildNameQueries: sinonim ikut jadi query server', () => {
   const qs = buildNameQueries('Muhammad Rizky');
   assert.ok(qs.includes('muhammad rizky'));

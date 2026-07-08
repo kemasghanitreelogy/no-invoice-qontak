@@ -23,7 +23,16 @@ function buildHistory(order) {
     { history_name: 'Dikirim',     at: itemShipped,                                                by: 'system' },
     { history_name: 'Diterima',    at: order.received_date,                                        by: 'system' },
     { history_name: 'Dibatalkan', at: order.mp_cancel_date || order.internal_cancel_date,          by: pickActor(order.mp_cancel_by, 'system') },
-    { history_name: 'Gagal',      at: order.failed_order_date,                                     by: 'system' },
+    // failed_order_date bisa terisi walau order akhirnya PAID (gagal sinkron
+    // sesaat lalu pulih — kasus SHF-8506-128887). Tampilkan "Gagal" hanya
+    // jika status order memang FAILED.
+    {
+      history_name: 'Gagal',
+      at: String(order.internal_status || '').toUpperCase().includes('FAILED')
+        ? order.failed_order_date
+        : null,
+      by: 'system',
+    },
     { history_name: 'Selesai',    at: order.completed_date || order.mp_completed_date,             by: 'system' },
   ];
 
