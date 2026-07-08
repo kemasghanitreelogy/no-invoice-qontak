@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { smartLookup, listOrders, searchOrdersByName, getOrderDetail } = require('./jubelio');
+const { smartLookup, listOrders, searchOrdersByName, getOrderDetail, getPicklist } = require('./jubelio');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -175,6 +175,22 @@ async function handleSearchByName(req, res) {
     let orders = await Promise.all(
       primary.map(async ({ row, match }) => {
         const detail = await getOrderDetail(row.salesorder_id);
+        // Timestamp pick gudang ("Diambil") tidak ada di detail order —
+        // ambil dari picklist bila row pencarian membawa picklist_id.
+        // Pengayaan opsional: gagal fetch picklist tidak menggagalkan response.
+        let extras = {};
+        const detailHasPick =
+          (detail.items || []).some((it) => it?.pick_scanned_date) || detail.tn_created_date;
+        if (row.picklist_id && !detailHasPick) {
+          try {
+            const pl = await getPicklist(row.picklist_id);
+            if (pl?.completed_date) {
+              extras = { picked_at: pl.completed_date, picked_by: row.picker || null };
+            }
+          } catch (e) {
+            logEvent(req, 'byname.picklist.skip', { picklist_id: row.picklist_id, message: e.message });
+          }
+        }
         // Shopify sering tidak mengisi payment_date walau lunas — untuk
         // pencocokan tanggal, order lunas fallback ke transaction_date
         // (checkout Shopify = bayar saat itu juga).
@@ -192,7 +208,7 @@ async function handleSearchByName(req, res) {
                 date_basis: detail.payment_date ? 'payment_date' : payRef ? 'transaction_date' : null,
               }
             : {}),
-          ...formatOrder(detail),
+          ...formatOrder(detail, extras),
         };
       }),
     );

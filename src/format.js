@@ -5,7 +5,9 @@ function pickActor(...candidates) {
   return 'system';
 }
 
-function buildHistory(order) {
+// extras: pengayaan dari sumber di luar detail order (mis. picklist WMS):
+// { picked_at, picked_by } — dipakai hanya bila detail tidak punya datanya.
+function buildHistory(order, extras = {}) {
   const items = Array.isArray(order.items) ? order.items : [];
   const itemAwb = items.map((it) => it?.awb_created_date).find(Boolean) || null;
   const itemShipped = items.map((it) => it?.shipped_date).find(Boolean) || null;
@@ -15,7 +17,7 @@ function buildHistory(order) {
   const events = [
     { history_name: 'Dibuat',      at: order.created_date,                                         by: pickActor(order.username, order.user_name, order.source_name) },
     { history_name: 'Dibayar',     at: order.payment_date,                                         by: pickActor(order.username, 'system') },
-    { history_name: 'Diambil',     at: itemPicked || order.tn_created_date,                        by: pickActor(order.picker, order.username) },
+    { history_name: 'Diambil',     at: itemPicked || order.tn_created_date || extras.picked_at,    by: pickActor(order.picker, extras.picked_by, order.username) },
     { history_name: 'Dikemas',     at: itemPacked,                                                 by: pickActor(order.picker, order.username) },
     // Resi terbit BUKAN berarti paket sudah jalan — jangan dilabeli "Dikirim".
     // "Dikirim" hanya dari shipped_date asli (serah terima ke kurir).
@@ -50,7 +52,7 @@ function buildHistory(order) {
     .map((e, i) => ({ history_id: i + 1, history_name: e.history_name, at: e.at, by: e.by }));
 }
 
-function formatOrder(order) {
+function formatOrder(order, extras = {}) {
   if (!order || typeof order !== 'object') return null;
   const num = (v) => (v != null && v !== '' ? Number(v) : 0);
   const products = (order.items || []).map((it) => {
@@ -75,7 +77,7 @@ function formatOrder(order) {
       subtotal,                         // total net baris yang benar2 dibayar
     };
   });
-  const history = buildHistory(order);
+  const history = buildHistory(order, extras);
   const last_history = history.length ? history[history.length - 1] : null;
 
   // Jubelio tidak selalu menyediakan timestamp untuk kejadian retur/batal,

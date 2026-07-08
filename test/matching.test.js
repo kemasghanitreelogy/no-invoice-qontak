@@ -312,6 +312,35 @@ test('formatOrder: tanggal cancel pada order non-cancel tidak jadi event Dibatal
   assert.ok(cancelled.history.some((h) => h.history_name === 'Dibatalkan'));
 });
 
+test('formatOrder: extras picklist mengisi event Diambil bila detail kosong', () => {
+  const { formatOrder } = require('../src/format');
+  const o = formatOrder(
+    {
+      salesorder_no: 'SHF-8506-128887',
+      internal_status: 'PAID',
+      created_date: '2026-07-07T09:00:21.067Z',
+      items: [],
+    },
+    { picked_at: '2026-07-08T02:19:17.024Z', picked_by: 'Ayu' },
+  );
+  const diambil = o.history.find((h) => h.history_name === 'Diambil');
+  assert.ok(diambil, 'event Diambil harus ada');
+  assert.equal(diambil.at, '2026-07-08T02:19:17.024Z');
+  assert.equal(diambil.by, 'Ayu');
+  // Data detail (kalau ada) tetap menang atas extras.
+  const o2 = formatOrder(
+    {
+      salesorder_no: 'X',
+      internal_status: 'PAID',
+      created_date: '2026-07-07T09:00:21.067Z',
+      tn_created_date: '2026-07-07T10:00:00.000Z',
+      items: [],
+    },
+    { picked_at: '2026-07-08T02:19:17.024Z' },
+  );
+  assert.equal(o2.history.find((h) => h.history_name === 'Diambil').at, '2026-07-07T10:00:00.000Z');
+});
+
 test('buildNameQueries: sinonim ikut jadi query server', () => {
   const qs = buildNameQueries('Muhammad Rizky');
   assert.ok(qs.includes('muhammad rizky'));

@@ -141,6 +141,18 @@ async function trySearchByQuery(query, opts = {}) {
   });
 }
 
+// Timestamp "Diambil" (pick gudang) tidak ada di detail order — Jubelio
+// menyimpannya di picklist (kasus SHF-8506: UI menampilkan Diambil dari
+// picklist.completed_date, detail order kosong).
+async function getPicklist(picklistId) {
+  return withAuth(async (token) => {
+    const { data } = await http.get(`/sales/picklists/${picklistId}`, {
+      headers: authHeaders(token),
+    });
+    return data;
+  });
+}
+
 async function getOrderDetail(salesorderId) {
   return withAuth(async (token) => {
     const { data } = await http.get(`/sales/orders/${salesorderId}`, {
@@ -278,6 +290,7 @@ async function listOrders({ status = 'completed', q = '', pageSize = 10 } = {}) 
 module.exports = {
   smartLookup,
   getOrderDetail,
+  getPicklist,
   tryGetOrderByNo,
   trySearchByQuery,
   listOrders,
