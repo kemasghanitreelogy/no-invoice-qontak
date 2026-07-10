@@ -201,11 +201,23 @@ async function handleSearchByName(req, res) {
 
   const limit = BY_NAME_LIMIT;
   try {
-    const { primary, is_ambiguous, total_found, queries_tried } = await searchOrdersByName(name, {
-      limit,
-      targetDate,
-      channel,
-    });
+    let searchResult = await searchOrdersByName(name, { limit, targetDate, channel });
+    // Channel relaxation: pelanggan sering salah sebut channel (TikTok Shop
+    // tampil sebagai "Shop | Tokopedia", webstore disangka marketplace).
+    // Kalau filter channel membuat hasil NOL, cari ulang tanpa filter —
+    // gerbang presisi (tier + ambiguity) tetap berlaku penuh, jadi ini
+    // menaikkan recall tanpa mengorbankan akurasi. Hasilnya diberi catatan
+    // supaya bot tahu channel aslinya berbeda dari yang disebut.
+    let channel_mismatch = false;
+    if (channel && !searchResult.primary.length) {
+      const relaxed = await searchOrdersByName(name, { limit, targetDate, channel: null });
+      if (relaxed.primary.length) {
+        searchResult = relaxed;
+        channel_mismatch = true;
+        logEvent(req, 'byname.channel.relaxed', { name, channel_requested: channel });
+      }
+    }
+    const { primary, is_ambiguous, total_found, queries_tried } = searchResult;
     if (!primary.length) {
       logEvent(req, 'byname.notfound', { name, channel, total_found, queries_tried });
       return res.status(404).json({
@@ -329,7 +341,15 @@ async function handleSearchByName(req, res) {
     });
     return res.json({
       input: name,
-      ...(channel ? { channel } : {}),
+      ...(channel ? { channel, channel_matched: !channel_mismatch } : {}),
+      ...(channel_mismatch
+        ? {
+            channel_note:
+              `Tidak ada hasil di channel ${channel} — order berikut ditemukan di channel lain ` +
+              '(lihat field "channel" per order). Pelanggan mungkin salah sebut channel; ' +
+              'catatan: order TikTok Shop tampil di sistem sebagai "Shop | Tokopedia".',
+          }
+        : {}),
       ...(targetDate ? { date: targetDate, resolved_by_date } : {}),
       total_found,
       count: orders.length,
