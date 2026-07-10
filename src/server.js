@@ -13,6 +13,7 @@ const { syncShippers } = require('./shopify-sync');
 const { withRetry } = require('./retry');
 const { notifyTelegram, notifyError } = require('./notify');
 const { trackOrder } = require('./binderbyte');
+const { resolveChannel, CHANNEL_HINT } = require('./channels');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -134,9 +135,13 @@ app.post('/api/orders/lookup', async (req, res) => {
 });
 
 // Cari order dari nama pemesan ATAU nama penerima di alamat pengiriman.
-// Toleran typo + sinonim. POST body raw JSON: { "name": "...", "date": "..." }.
+// Toleran typo + sinonim. POST body raw JSON:
+//   { "name": "...", "date": "...", "channel": "..." } — hanya "name" wajib.
 // - "date" opsional (tanggal BAYAR versi pelanggan/WIB) — dipakai untuk
 //   menaikkan akurasi: verifikasi ke payment_date order & memecah ambiguitas.
+// - "channel" opsional (shopify/shopee/tokopedia/tiktok/internal, toleran
+//   typo + sinonim mis. "tokped", "tt", "wa") — memfilter kandidat sebelum
+//   scoring sehingga juga memecah ambiguitas antar-channel.
 // - Jumlah order dipatok internal (maks 5, kandidat >= probable).
 const BY_NAME_LIMIT = 5;
 const DATE_TOLERANCE_DAYS = 1; // payment_date UTC vs persepsi WIB bisa geser 1 hari
@@ -163,6 +168,22 @@ async function handleSearchByName(req, res) {
     });
   }
 
+  // "channel" opsional — dinormalisasi dgn sinonim + anti-typo (channels.js).
+  const channelRaw = req.body?.channel ?? req.body?.kanal ?? req.body?.marketplace;
+  let channel = null;
+  if (channelRaw != null && String(channelRaw).trim() !== '') {
+    const resolved = resolveChannel(channelRaw);
+    if (!resolved) {
+      logEvent(req, 'byname.reject', { reason: 'channel-unknown', channel_raw: String(channelRaw) });
+      return res.status(400).json({
+        error: 'channel tidak dikenali',
+        received: { channel: String(channelRaw) },
+        hint: `Channel yang dikenal: ${CHANNEL_HINT} (sinonim & typo ringan diterima, mis. "tokped", "tik tok", "wa").`,
+      });
+    }
+    channel = resolved.canonical;
+  }
+
   const dateRaw = req.body?.date ?? req.body?.tanggal ?? req.body?.payment_date;
   let targetDate = null;
   if (dateRaw != null && String(dateRaw).trim() !== '') {
@@ -176,19 +197,23 @@ async function handleSearchByName(req, res) {
       });
     }
   }
-  logEvent(req, 'byname.search', { name, date_raw: dateRaw != null ? String(dateRaw) : null, date_parsed: targetDate });
+  logEvent(req, 'byname.search', { name, date_raw: dateRaw != null ? String(dateRaw) : null, date_parsed: targetDate, channel });
 
   const limit = BY_NAME_LIMIT;
   try {
     const { primary, is_ambiguous, total_found, queries_tried } = await searchOrdersByName(name, {
       limit,
       targetDate,
+      channel,
     });
     if (!primary.length) {
-      logEvent(req, 'byname.notfound', { name, total_found, queries_tried });
+      logEvent(req, 'byname.notfound', { name, channel, total_found, queries_tried });
       return res.status(404).json({
-        error: 'Tidak ada pesanan yang cocok dengan nama tersebut',
+        error: channel
+          ? `Tidak ada pesanan di channel ${channel} yang cocok dengan nama tersebut`
+          : 'Tidak ada pesanan yang cocok dengan nama tersebut',
         input: name,
+        ...(channel ? { channel } : {}),
         queries_tried,
       });
     }
@@ -304,6 +329,7 @@ async function handleSearchByName(req, res) {
     });
     return res.json({
       input: name,
+      ...(channel ? { channel } : {}),
       ...(targetDate ? { date: targetDate, resolved_by_date } : {}),
       total_found,
       count: orders.length,

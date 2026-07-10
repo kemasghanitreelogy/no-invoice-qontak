@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { detectChannel } = require('./detect');
+const { channelOfRow } = require('./channels');
 const { buildNameQueries, matchRow, decideMatches, normalizeName, TIER } = require('./matching');
 
 const BASE_URL = process.env.JUBELIO_BASE_URL || 'https://api2.jubelio.com';
@@ -210,7 +211,10 @@ async function smartLookup(rawInput) {
 // Engine v2 (docs/design-name-matching.md): toleran typo + sinonim/ejaan lama,
 // dengan decision policy eksplisit (tier confidence + ambiguity margin) supaya
 // tidak pernah percaya diri pada match yang meragukan.
-async function searchOrdersByName(name, { limit = 5, targetDate = null } = {}) {
+// channel (opsional): kanonik dari resolveChannel — memfilter row SEBELUM
+// scoring & keputusan ambiguitas, jadi "Komang di Shopee" tidak dianggap
+// ambigu dengan "Komang di Tokopedia" saat user sudah menyebut channel.
+async function searchOrdersByName(name, { limit = 5, targetDate = null, channel = null } = {}) {
   const queryNorm = normalizeName(name);
   const queries = buildNameQueries(name);
   const tried = [];
@@ -239,6 +243,7 @@ async function searchOrdersByName(name, { limit = 5, targetDate = null } = {}) {
         const rows = Array.isArray(r.value.data?.data) ? r.value.data.data : [];
         for (const row of rows) {
           if (!row?.salesorder_id || byId.has(row.salesorder_id)) continue;
+          if (channel && channelOfRow(row) !== channel) continue;
           const match = matchRow(queryNorm, row);
           if (match.score >= TIER.WEAK) byId.set(row.salesorder_id, { row, match });
         }
