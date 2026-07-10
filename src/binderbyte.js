@@ -96,14 +96,25 @@ async function trackOrder(detail) {
   try {
     const data = await withRetry(() => callBinderByte(params), { attempts: 3, label: `binderbyte:${awb}` });
     const s = data?.summary || {};
-    const history = (data?.history || []).map((h) => ({ date: h.date, desc: h.desc, location: h.location }));
+    // Urutan history BinderByte TIDAK bisa diandalkan (terpantau terbaru-dulu
+    // di Lion) — sort kronologis eksplisit berdasarkan tanggal. Bila ada
+    // tanggal yang tak terbaca, pertahankan urutan asli (default mereka
+    // terbaru-dulu, jadi checkpoint terakhir = elemen pertama).
+    const ts = (h) => {
+      const t = Date.parse(String(h.date || '').replace(' ', 'T'));
+      return Number.isNaN(t) ? null : t;
+    };
+    let history = (data?.history || []).map((h) => ({ date: h.date, desc: h.desc, location: h.location }));
+    const allDated = history.length > 0 && history.every((h) => ts(h) !== null);
+    if (allDated) history = [...history].sort((a, b) => ts(a) - ts(b));
+    const last_update = history.length ? (allDated ? history[history.length - 1] : history[0]) : null;
     const result = {
       courier,
       awb,
       status: s.status || null, // mis. DELIVERED / ON PROCESS
       service: s.service || null,
       courier_name: s.courier || null,
-      last_update: history.length ? history[history.length - 1] : null,
+      last_update,
       receiver: data?.detail?.receiver || null,
       origin: data?.detail?.origin || null,
       destination: data?.detail?.destination || null,

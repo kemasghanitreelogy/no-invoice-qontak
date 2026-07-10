@@ -137,3 +137,23 @@ test('trackOrder: hasil sukses di-cache (panggilan kedua tanpa fetch), error tid
   );
   assert.equal(errCalls, 2);
 });
+
+test('trackOrder: history terbaru-dulu dari BinderByte diurutkan kronologis, last_update = terbaru', async () => {
+  process.env.BINDERBYTE_API_KEY = 'kunci-tes';
+  const newestFirst = {
+    ...BB_OK,
+    data: {
+      ...BB_OK.data,
+      history: [
+        { date: '2026-07-10 09:00', desc: 'OUTGOING diberangkatkan', location: '' },
+        { date: '2026-07-09 04:32', desc: 'PICKED UP diproses agen', location: '' },
+      ],
+    },
+  };
+  const result = await withMockFetch(
+    async () => ({ ok: true, json: async () => newestFirst }),
+    () => trackOrder({ shipper: 'lion', tracking_no: 'AWB-SORT-1' }),
+  );
+  assert.equal(result.history[0].desc, 'PICKED UP diproses agen'); // kronologis
+  assert.equal(result.last_update.desc, 'OUTGOING diberangkatkan'); // yang terbaru
+});
