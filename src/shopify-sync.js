@@ -10,7 +10,7 @@ const {
   applyShipper,
 } = require('./shipper');
 const { withRetry } = require('./retry');
-const { notifyTelegram } = require('./notify');
+const { notifyTelegram, describeError } = require('./notify');
 
 const SHOPIFY_API_VERSION = '2026-07';
 
@@ -110,7 +110,9 @@ async function syncShippers({ days = 7, apply = false, log = () => {} } = {}) {
       if (!resolved) {
         stats.not_found += 1;
         log(`✗ ${label}: tidak ketemu di Jubelio (SHF-${orderNum} / ref ${so.legacyResourceId})`);
-        failures.push(`${label}: tidak ketemu di Jubelio`);
+        failures.push(
+          `${label} — tidak ketemu di Jubelio\n  dicari sebagai: SHF-${orderNum}, lalu ref_no ${so.legacyResourceId}\n  kemungkinan: order belum tersinkron ke Jubelio / order store lain / order tes`,
+        );
         continue;
       }
       const { detail } = resolved;
@@ -137,23 +139,35 @@ async function syncShippers({ days = 7, apply = false, log = () => {} } = {}) {
       if (changed) stats.filled += 1;
       else {
         stats.failed += 1;
-        failures.push(`${detail.salesorder_no}: update terkirim tapi verifikasi beda ("${afterValue}")`);
+        failures.push(
+          `${detail.salesorder_no} — update terkirim tapi hasil baca-ulang beda\n  diharapkan: "${tracking.shipper}", terbaca: "${afterValue}"\n  kemungkinan: race dgn sinkronisasi channel Jubelio — cek manual order ini`,
+        );
       }
     } catch (err) {
       stats.failed += 1;
       const status = err.response?.status;
       log(`✗ ${label}: gagal${status ? ` (HTTP ${status})` : ''} — ${err.message}`);
-      failures.push(`${label}: ${err.message}${status ? ` (HTTP ${status})` : ''}`);
+      // Diagnostik lengkap per order (request mana, HTTP status, body respons
+      // upstream, riwayat retry) supaya root cause langsung kelihatan.
+      failures.push(
+        `${label} (kurir target: ${tracking.shipper}, resi: ${tracking.number || '-'})\n` +
+          describeError(err, { maxBody: 300 })
+            .split('\n')
+            .map((l) => `  ${l}`)
+            .join('\n'),
+      );
     }
   }
 
-  // Kegagalan yang bertahan setelah retry -> satu notifikasi Telegram
-  // ringkasan (bukan per order, supaya tidak membanjiri chat).
+  // Kegagalan yang bertahan setelah retry -> satu notifikasi Telegram berisi
+  // diagnostik per order (dibatasi 8 order supaya muat; sisanya dihitung).
   if (failures.length) {
+    const shown = failures.slice(0, 8);
     await notifyTelegram(
-      `⚠️ Auto-fill kurir Jubelio: ${failures.length} order gagal setelah retry (mode ${apply ? 'apply' : 'dry-run'}, ${days} hari):\n` +
-        failures.slice(0, 20).map((l) => `• ${l}`).join('\n') +
-        (failures.length > 20 ? `\n…dan ${failures.length - 20} lainnya` : ''),
+      `🛑 Auto-fill kurir Jubelio: ${failures.length} order gagal setelah retry\n` +
+        `Mode: ${apply ? 'apply' : 'dry-run'} | Rentang: ${days} hari | Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB\n\n` +
+        shown.map((l, i) => `${i + 1}) ${l}`).join('\n\n') +
+        (failures.length > shown.length ? `\n\n…dan ${failures.length - shown.length} order lain (lihat Vercel Logs)` : ''),
       { key: 'sync-shipper:failures' },
     );
   }

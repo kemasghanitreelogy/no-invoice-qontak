@@ -75,3 +75,44 @@ test('notifyTelegram: dilewati dengan aman bila env belum di-set', async () => {
     if (savedChat) process.env.TELEGRAM_CHAT_ID = savedChat;
   }
 });
+
+test('withRetry: error final membawa retryInfo (kronologi percobaan)', async () => {
+  try {
+    await withRetry(async () => { throw httpErr(502); }, { baseMs: 1, label: 'tes', onRetry: () => {} });
+    assert.fail('harusnya melempar');
+  } catch (err) {
+    assert.equal(err.retryInfo.attempts, 3);
+    assert.equal(err.retryInfo.label, 'tes');
+    assert.equal(err.retryInfo.history.length, 3);
+    assert.equal(err.retryInfo.history[0].status, 502);
+    assert.ok(err.retryInfo.history[0].delayMs > 0);
+  }
+});
+
+test('describeError: memuat request, status, body upstream, retry, stack', () => {
+  const { describeError } = require('../src/notify');
+  const err = new Error('Request failed with status code 502');
+  err.config = { method: 'post', baseURL: 'https://api2.jubelio.com', url: '/sales/orders/' };
+  err.response = { status: 502, statusText: 'Bad Gateway', data: { code: 'UPSTREAM_DOWN', detail: 'wms timeout' } };
+  err.retryInfo = { label: 'apply:#8509', attempts: 3, history: [
+    { attempt: 1, status: 502, message: 'x', delayMs: 400 },
+    { attempt: 2, status: 502, message: 'x', delayMs: 900 },
+    { attempt: 3, status: 502, message: 'x' },
+  ] };
+  const out = describeError(err);
+  assert.match(out, /POST https:\/\/api2\.jubelio\.com\/sales\/orders\//);
+  assert.match(out, /HTTP status: 502 Bad Gateway/);
+  assert.match(out, /UPSTREAM_DOWN/);       // body upstream = root cause
+  assert.match(out, /Retry: 3x gagal semua \[apply:#8509\]/);
+  assert.match(out, /percobaan 2: HTTP 502/);
+  assert.match(out, /Stack \(teratas\)/);
+});
+
+test('describeError: error network tanpa response tetap informatif', () => {
+  const { describeError } = require('../src/notify');
+  const err = new Error('connect ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const out = describeError(err);
+  assert.match(out, /connect ETIMEDOUT/);
+  assert.match(out, /Kode network: ETIMEDOUT/);
+});

@@ -11,7 +11,7 @@ const {
 } = require('./shipper');
 const { syncShippers } = require('./shopify-sync');
 const { withRetry } = require('./retry');
-const { notifyTelegram } = require('./notify');
+const { notifyTelegram, notifyError } = require('./notify');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -426,13 +426,24 @@ app.post('/webhooks/shopify/fulfillment', async (req, res) => {
     return res.status(200).json({ updated: detail.salesorder_no, shipper });
   } catch (err) {
     logEvent(req, 'shopify.webhook.error', { ...base, message: err.message, upstream: truncate(err.response?.data, 300) });
-    // Sudah 3x dicoba tapi tetap gagal -> kabari Telegram (throttle per order
-    // 15 menit — retry Shopify berikutnya tidak mengirim pesan duplikat),
-    // lalu 500 agar Shopify retry (idempoten, aman diulang).
-    await notifyTelegram(
-      `⚠️ Webhook kurir gagal setelah 3x retry\nOrder Shopify: #${orderNum} (id ${f.order_id})\nKurir: ${shipper}\nError: ${err.message}\nShopify akan retry otomatis; cron harian jadi cadangan.`,
-      { key: `webhook:${orderNum || f.order_id}` },
-    );
+    // Sudah 3x dicoba tapi tetap gagal -> laporan diagnostik lengkap ke
+    // Telegram (throttle per order 15 menit — retry Shopify berikutnya tidak
+    // mengirim duplikat), lalu 500 agar Shopify retry (idempoten).
+    await notifyError({
+      title: 'Webhook auto-fill kurir GAGAL setelah retry',
+      layer: 'webhook fulfillments/create',
+      context: {
+        'order Shopify': `#${orderNum}`,
+        'order_id Shopify': f.order_id,
+        'kurir target': shipper,
+        'tracking URL': trackingUrls.join(', ') || null,
+        'tracking company': f.tracking_company || null,
+        'shop domain': base.shop,
+        'tindak lanjut': 'Shopify retry otomatis; cron 05:30 WIB jadi cadangan',
+      },
+      error: err,
+      key: `webhook:${orderNum || f.order_id}`,
+    });
     return res.status(500).json({ error: err.message });
   }
 });
@@ -461,7 +472,13 @@ app.get('/api/cron/sync-shipper', async (req, res) => {
   } catch (err) {
     // Gagal total (mis. Shopify tak terjangkau setelah retry) -> Telegram.
     logEvent(req, 'cron.sync.error', { days, message: err.message });
-    await notifyTelegram(`🛑 Cron sync kurir GAGAL TOTAL: ${err.message}`, { key: 'cron:fatal' });
+    await notifyError({
+      title: 'Cron sync kurir GAGAL TOTAL',
+      layer: 'cron /api/cron/sync-shipper',
+      context: { 'rentang hari': days, 'tindak lanjut': 'cek Vercel Logs; jalankan manual: node scripts/sync-shipper-from-shopify.js --apply' },
+      error: err,
+      key: 'cron:fatal',
+    });
     return res.status(500).json({ error: err.message });
   }
 });
