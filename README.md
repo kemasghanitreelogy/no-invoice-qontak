@@ -444,6 +444,10 @@ mengisinya otomatis dari tracking URL fulfillment Shopify:
 | `lionparcel.com` | `lion` |
 | `jne.co.id` | `jne` |
 
+Bila fulfillment dibuat manual tanpa tracking URL, nama kurir Shopify
+(`tracking_company`) dipakai sebagai fallback: `J&T*` → `jnt`, `Lion*` →
+`lion`, `JNE*` → `jne`.
+
 Kebijakan: hanya mengisi bila kurir masih "Domestic Shipping"/kosong (isian
 manual tidak ditimpa); order dicocokkan dua jalur (`SHF-{no}` + verifikasi
 `ref_no` = id order Shopify, fallback pencarian by `ref_no`); semua operasi

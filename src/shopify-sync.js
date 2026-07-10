@@ -4,7 +4,7 @@
 // terlewat) dan scripts/sync-shipper-from-shopify.js (backfill manual).
 const {
   resolveOrderForShopify,
-  shipperFromTrackingUrls,
+  shipperFromFulfillment,
   isFillable,
   currentShipperOf,
   applyShipper,
@@ -60,11 +60,13 @@ async function fetchShopifyOrders(days) {
 }
 
 function trackingOf(fulfillments) {
-  const infos = (fulfillments || []).flatMap((f) => f.trackingInfo || []).filter((t) => t.url);
+  const infos = (fulfillments || []).flatMap((f) => f.trackingInfo || []).filter((t) => t.url || t.company);
   if (!infos.length) return null;
+  const urls = infos.map((t) => t.url).filter(Boolean);
+  const companies = infos.map((t) => t.company).filter(Boolean);
   return {
-    shipper: shipperFromTrackingUrls(infos.map((t) => t.url)),
-    urls: infos.map((t) => t.url),
+    shipper: shipperFromFulfillment({ urls, companies }),
+    urls: urls.length ? urls : companies, // untuk pesan log "URL tak dikenal"
     number: infos[0].number,
   };
 }

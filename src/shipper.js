@@ -39,6 +39,30 @@ function shipperFromTrackingUrls(urls) {
   return null;
 }
 
+// Fallback bila fulfillment dibuat manual TANPA tracking URL (kasus nyata
+// #8528: company "J&T Express", url null): map dari nama kurir Shopify.
+const COMPANY_TO_SHIPPER = [
+  { pattern: 'j&t', shipper: 'jnt' },
+  { pattern: 'jnt', shipper: 'jnt' },
+  { pattern: 'lion', shipper: 'lion' },
+  { pattern: 'jne', shipper: 'jne' },
+];
+
+function shipperFromCompanies(companies) {
+  for (const company of companies || []) {
+    const lower = String(company || '').toLowerCase();
+    for (const { pattern, shipper } of COMPANY_TO_SHIPPER) {
+      if (lower.includes(pattern)) return shipper;
+    }
+  }
+  return null;
+}
+
+// Gabungan: URL lebih spesifik jadi diprioritaskan, nama kurir sebagai fallback.
+function shipperFromFulfillment({ urls = [], companies = [] } = {}) {
+  return shipperFromTrackingUrls(urls) || shipperFromCompanies(companies);
+}
+
 // Cari order Jubelio padanan order Shopify dengan dua jalur yang saling
 // memverifikasi (ref_no Jubelio = legacy id order Shopify):
 //   1. nomor order -> smartLookup("SHF-{no}"), diterima hanya jika ref_no cocok
@@ -182,8 +206,11 @@ async function applyShipper(detail, newShipper) {
 
 module.exports = {
   URL_TO_SHIPPER,
+  COMPANY_TO_SHIPPER,
   shipperForTrackingUrl,
   shipperFromTrackingUrls,
+  shipperFromCompanies,
+  shipperFromFulfillment,
   resolveOrderForShopify,
   isFillable,
   currentShipperOf,

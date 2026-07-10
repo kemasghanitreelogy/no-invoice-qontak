@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { smartLookup, listOrders, searchOrdersByName, getOrderDetail, getPicklist } = require('./jubelio');
 const {
-  shipperFromTrackingUrls,
+  shipperFromFulfillment,
   resolveOrderForShopify,
   isFillable,
   currentShipperOf,
@@ -357,7 +357,12 @@ app.post('/webhooks/shopify/fulfillment', async (req, res) => {
     ...(Array.isArray(f.tracking_urls) ? f.tracking_urls : []),
     ...(f.tracking_url ? [f.tracking_url] : []),
   ];
-  const shipper = shipperFromTrackingUrls(trackingUrls);
+  // URL diprioritaskan; nama kurir (tracking_company) fallback untuk
+  // fulfillment manual tanpa URL (kasus #8528).
+  const shipper = shipperFromFulfillment({
+    urls: trackingUrls,
+    companies: f.tracking_company ? [f.tracking_company] : [],
+  });
   const base = {
     order: orderNum,
     order_id: f.order_id,
@@ -377,8 +382,12 @@ app.post('/webhooks/shopify/fulfillment', async (req, res) => {
     return res.status(200).json({ skipped: 'payload tanpa name/order_id' });
   }
   if (!shipper) {
-    logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'tracking URL tidak dikenal mapping' });
-    return res.status(200).json({ skipped: 'tracking URL tidak dikenal', tracking_urls: trackingUrls });
+    logEvent(req, 'shopify.webhook.skip', {
+      ...base,
+      reason: 'tracking URL/kurir tidak dikenal mapping',
+      tracking_company: f.tracking_company || null,
+    });
+    return res.status(200).json({ skipped: 'tracking URL/kurir tidak dikenal', tracking_urls: trackingUrls, tracking_company: f.tracking_company || null });
   }
 
   try {

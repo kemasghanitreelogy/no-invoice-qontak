@@ -211,3 +211,27 @@ test('cron: tanpa/salah Bearer ditolak 401', async () => {
     assert.equal(badAuth.status, 401);
   });
 });
+
+// ---- fallback nama kurir (fulfillment manual tanpa tracking URL) ------------
+
+const { shipperFromCompanies, shipperFromFulfillment } = require('../src/shipper');
+
+test('shipperFromCompanies: J&T Express/JNE/Lion Parcel dikenali', () => {
+  assert.equal(shipperFromCompanies(['J&T Express']), 'jnt');
+  assert.equal(shipperFromCompanies(['JNE']), 'jne');
+  assert.equal(shipperFromCompanies(['Lion Parcel']), 'lion');
+  assert.equal(shipperFromCompanies(['UPS']), null);
+  assert.equal(shipperFromCompanies([]), null);
+});
+
+test('shipperFromFulfillment: URL diprioritaskan, company jadi fallback', () => {
+  // kasus #8528: company terisi, url null
+  assert.equal(shipperFromFulfillment({ urls: [], companies: ['J&T Express'] }), 'jnt');
+  // URL menang atas company bila keduanya ada dan beda
+  assert.equal(
+    shipperFromFulfillment({ urls: ['https://jne.co.id/x'], companies: ['J&T Express'] }),
+    'jne',
+  );
+  assert.equal(shipperFromFulfillment({ urls: [], companies: ['Other'] }), null);
+  assert.equal(shipperFromFulfillment({}), null);
+});
