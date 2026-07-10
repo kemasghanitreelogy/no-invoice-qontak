@@ -2,7 +2,16 @@ require('dotenv').config();
 const crypto = require('crypto');
 const express = require('express');
 const { smartLookup, listOrders, searchOrdersByName, getOrderDetail, getPicklist } = require('./jubelio');
-const { shipperForTrackingUrl, isFillable, currentShipperOf, applyShipper } = require('./shipper');
+const {
+  shipperFromTrackingUrls,
+  resolveOrderForShopify,
+  isFillable,
+  currentShipperOf,
+  applyShipper,
+} = require('./shipper');
+const { syncShippers } = require('./shopify-sync');
+const { withRetry } = require('./retry');
+const { notifyTelegram } = require('./notify');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -348,12 +357,24 @@ app.post('/webhooks/shopify/fulfillment', async (req, res) => {
     ...(Array.isArray(f.tracking_urls) ? f.tracking_urls : []),
     ...(f.tracking_url ? [f.tracking_url] : []),
   ];
-  const shipper = trackingUrls.map(shipperForTrackingUrl).find(Boolean) || null;
-  const base = { order: orderNum, order_id: f.order_id, tracking_urls: trackingUrls, shipper };
+  const shipper = shipperFromTrackingUrls(trackingUrls);
+  const base = {
+    order: orderNum,
+    order_id: f.order_id,
+    tracking_urls: trackingUrls,
+    shipper,
+    topic: req.get('X-Shopify-Topic') || null,
+    shop: req.get('X-Shopify-Shop-Domain') || null,
+  };
 
-  if (!orderNum) {
-    logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'payload tanpa name' });
-    return res.status(200).json({ skipped: 'payload tanpa name' });
+  // PENTING: balasan non-2xx yang terus-menerus membuat Shopify MENGHAPUS
+  // webhook ini. Semua kondisi "tidak bisa diproses" dibalas 200 + log;
+  // cron harian /api/cron/sync-shipper menjadi jaring pengaman yang
+  // menjamin order terlewat tetap terisi. 5xx hanya untuk gangguan
+  // sementara (Jubelio down) di mana retry Shopify memang menolong.
+  if (!orderNum && f.order_id == null) {
+    logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'payload tanpa name/order_id' });
+    return res.status(200).json({ skipped: 'payload tanpa name/order_id' });
   }
   if (!shipper) {
     logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'tracking URL tidak dikenal mapping' });
@@ -361,36 +382,77 @@ app.post('/webhooks/shopify/fulfillment', async (req, res) => {
   }
 
   try {
-    const result = await smartLookup(`SHF-${orderNum}`);
-    if (!result.found) {
-      // 502 supaya Shopify retry — order mungkin belum tersinkron ke Jubelio.
+    // Retry 3x (backoff+jitter) untuk error sementara sebelum menyerah.
+    const resolved = await withRetry(
+      () => resolveOrderForShopify({ orderNum, shopifyOrderId: f.order_id }),
+      { label: `webhook.resolve:${orderNum}`, onRetry: (r) => logEvent(req, 'shopify.webhook.retry', r) },
+    );
+    if (!resolved) {
       logEvent(req, 'shopify.webhook.notfound', base);
-      return res.status(502).json({ error: `SHF-${orderNum} belum ada di Jubelio, akan di-retry Shopify` });
+      return res.status(200).json({ skipped: 'order belum ketemu di Jubelio — akan disapu cron harian' });
     }
-    const detail = result.order;
-    // Pengaman salah order: ref_no Jubelio = legacy id order Shopify.
-    if (detail.ref_no && f.order_id && String(detail.ref_no) !== String(f.order_id)) {
-      logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'ref_no mismatch', ref_no: detail.ref_no });
-      return res.status(200).json({ skipped: 'ref_no tidak cocok, tidak diubah demi aman' });
-    }
+    const { detail, via } = resolved;
     const current = currentShipperOf(detail);
-    if (!isFillable(current) || current.trim().toLowerCase() === shipper) {
+    if (!isFillable(current)) {
       logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'kurir sudah terisi', current });
       return res.status(200).json({ skipped: 'kurir sudah terisi', current });
     }
 
-    const { afterValue, changed } = await applyShipper(detail, shipper);
+    const { afterValue, changed } = await withRetry(
+      () => applyShipper(detail, shipper),
+      { label: `webhook.apply:${orderNum}`, onRetry: (r) => logEvent(req, 'shopify.webhook.retry', r) },
+    );
     logEvent(req, changed ? 'shopify.webhook.filled' : 'shopify.webhook.unverified', {
       ...base,
       salesorder_no: detail.salesorder_no,
+      resolved_via: via,
       before: current,
       after: afterValue,
     });
-    if (!changed) return res.status(500).json({ error: 'update terkirim tapi verifikasi gagal', after: afterValue });
+    if (!changed) {
+      // Update terkirim tapi hasil baca-ulang beda — jangan retry (bisa jadi
+      // race dgn sinkronisasi channel); cron akan mengevaluasi ulang.
+      return res.status(200).json({ warning: 'update terkirim, verifikasi beda', after: afterValue });
+    }
     return res.status(200).json({ updated: detail.salesorder_no, shipper });
   } catch (err) {
     logEvent(req, 'shopify.webhook.error', { ...base, message: err.message, upstream: truncate(err.response?.data, 300) });
-    // 500 -> Shopify retry otomatis (idempoten, aman diulang).
+    // Sudah 3x dicoba tapi tetap gagal -> kabari Telegram (throttle per order
+    // 15 menit — retry Shopify berikutnya tidak mengirim pesan duplikat),
+    // lalu 500 agar Shopify retry (idempoten, aman diulang).
+    await notifyTelegram(
+      `⚠️ Webhook kurir gagal setelah 3x retry\nOrder Shopify: #${orderNum} (id ${f.order_id})\nKurir: ${shipper}\nError: ${err.message}\nShopify akan retry otomatis; cron harian jadi cadangan.`,
+      { key: `webhook:${orderNum || f.order_id}` },
+    );
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Cron Vercel: jaring pengaman harian -----------------------------------
+// Menyapu order Shopify 3 hari terakhir dan mengisi kurir yang terlewat
+// webhook (server down, order belum tersinkron ke Jubelio saat webhook tiba,
+// dsb). Vercel mengirim header "Authorization: Bearer {CRON_SECRET}".
+app.get('/api/cron/sync-shipper', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    logEvent(req, 'cron.sync.misconfig', { message: 'CRON_SECRET belum di-set' });
+    return res.status(503).json({ error: 'cron belum dikonfigurasi' });
+  }
+  if (req.get('Authorization') !== `Bearer ${secret}`) {
+    logEvent(req, 'cron.sync.unauthorized', {});
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const days = Math.min(14, Number(req.query.days) || 3);
+  try {
+    const lines = [];
+    const stats = await syncShippers({ days, apply: true, log: (l) => lines.push(l) });
+    logEvent(req, 'cron.sync.done', { days, ...stats, detail: truncate(lines.join(' | '), 1500) });
+    return res.status(200).json({ days, stats });
+  } catch (err) {
+    // Gagal total (mis. Shopify tak terjangkau setelah retry) -> Telegram.
+    logEvent(req, 'cron.sync.error', { days, message: err.message });
+    await notifyTelegram(`🛑 Cron sync kurir GAGAL TOTAL: ${err.message}`, { key: 'cron:fatal' });
     return res.status(500).json({ error: err.message });
   }
 });

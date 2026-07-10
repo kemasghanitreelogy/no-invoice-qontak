@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/matching.test.js",
+    "test": "node --test 'test/*.test.js'",
     "eval:names": "node scripts/eval-names.js"
   },
   "dependencies": {

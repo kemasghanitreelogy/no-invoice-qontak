@@ -430,3 +430,46 @@ Lookup mencakup pesanan di **semua tahap operasional** berikut (via 13 endpoint 
 - **Pencarian terbatas pada list endpoint yang men-support `q`** — order yang sangat lama / di-archive di luar siklus standar mungkin tidak terjangkau.
 - **Token cache in-memory** — tidak persisten lintas restart proses; deploy multi-instance akan login terpisah per instance.
 - **Tidak ada autentikasi** di sisi API ini. Tambahkan API key / signed header di middleware sebelum expose ke publik.
+
+---
+
+## Auto-fill Kurir (Shopify → Jubelio)
+
+Field **Kurir** order Shopify di Jubelio default "Domestic Shipping". Sistem ini
+mengisinya otomatis dari tracking URL fulfillment Shopify:
+
+| Tracking URL mengandung | Kurir diisi |
+|---|---|
+| `jet.co.id` | `jnt` |
+| `lionparcel.com` | `lion` |
+| `jne.co.id` | `jne` |
+
+Kebijakan: hanya mengisi bila kurir masih "Domestic Shipping"/kosong (isian
+manual tidak ditimpa); order dicocokkan dua jalur (`SHF-{no}` + verifikasi
+`ref_no` = id order Shopify, fallback pencarian by `ref_no`); semua operasi
+idempoten (aman diulang).
+
+**Tiga lapisan:**
+
+1. **Webhook** `POST /webhooks/shopify/fulfillment` — didaftarkan di Shopify
+   Admin (Settings → Notifications → Webhooks, event *Fulfillment creation*,
+   JSON). Diverifikasi HMAC (`SHOPIFY_WEBHOOK_SECRET`). Selalu balas 200 untuk
+   kondisi non-transient supaya Shopify tidak menonaktifkan webhook; 5xx hanya
+   untuk gangguan sementara (memicu retry Shopify).
+2. **Cron harian** `GET /api/cron/sync-shipper` (05:30 WIB, lihat
+   `vercel.json`) — menyapu 3 hari terakhir sebagai jaring pengaman bila ada
+   webhook terlewat. Diproteksi `Authorization: Bearer {CRON_SECRET}`.
+3. **Backfill manual** — `node scripts/sync-shipper-from-shopify.js [--days=N]
+   [--apply]` (dry-run tanpa `--apply`) dan `node scripts/update-shipper.js
+   mapping.csv [--apply]` untuk koreksi per order.
+
+**Retry & notifikasi:** semua panggilan upstream di alur ini retry 3x
+(exponential backoff + jitter; hanya untuk 5xx/429/network — 4xx tidak).
+Kegagalan yang bertahan dikirim ke Telegram (`TELEGRAM_BOT_TOKEN` +
+`TELEGRAM_CHAT_ID`, buat bot via @BotFather; ambil chat id dari
+`https://api.telegram.org/bot<TOKEN>/getUpdates` setelah chat dengan bot).
+Bila env Telegram belum di-set, notifikasi dilewati (hanya log).
+
+Env tambahan: `ADMIN_API_KEY` (token Admin API Shopify `shpat_...`),
+`STORE_NAME`, `SHOPIFY_WEBHOOK_SECRET`, `CRON_SECRET`, `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID`.

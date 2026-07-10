@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-shipper",
+      "schedule": "30 22 * * *"
+    }
+  ]
+}
