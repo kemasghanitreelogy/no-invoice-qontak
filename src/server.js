@@ -1,6 +1,8 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const { smartLookup, listOrders, searchOrdersByName, getOrderDetail, getPicklist } = require('./jubelio');
+const { shipperForTrackingUrl, isFillable, currentShipperOf, applyShipper } = require('./shipper');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -11,9 +13,14 @@ const app = express();
 // kadang mengirim JSON tanpa header Content-Type: application/json, atau
 // sebagai form-urlencoded. body-parser menandai req._body setelah salah satu
 // parser berhasil, jadi urutan ini aman.
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-app.use(express.text({ type: () => true, limit: '1mb' }));
+// rawBody disimpan untuk verifikasi HMAC webhook Shopify (tanda tangan
+// dihitung dari bytes mentah, bukan hasil parse).
+const keepRawBody = (req, _res, buf) => {
+  req.rawBody = buf;
+};
+app.use(express.json({ limit: '1mb', verify: keepRawBody }));
+app.use(express.urlencoded({ extended: true, limit: '1mb', verify: keepRawBody }));
+app.use(express.text({ type: () => true, limit: '1mb', verify: keepRawBody }));
 app.use((req, _res, next) => {
   if (typeof req.body === 'string') {
     const rawText = req.body.trim();
@@ -304,6 +311,87 @@ app.get('/api/orders/sample', async (req, res) => {
   } catch (err) {
     const code = err.response?.status || 500;
     res.status(code).json({ error: err.message, upstream: err.response?.data });
+  }
+});
+
+// ---- Webhook Shopify: fulfillments/create -> auto-isi Kurir di Jubelio ----
+// Didaftarkan di Shopify Admin > Settings > Notifications > Webhooks dengan
+// event "Fulfillment creation". Saat order di-mark as fulfilled, Shopify
+// mengirim payload berisi tracking_url; kita map ke nama kurir (jnt/lion/jne)
+// dan mengisi field Kurir order Jubelio padanannya (SHF-{no}) bila masih
+// "Domestic Shipping"/kosong. Idempoten: retry Shopify aman.
+app.post('/webhooks/shopify/fulfillment', async (req, res) => {
+  const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
+  if (!secret) {
+    logEvent(req, 'shopify.webhook.misconfig', { message: 'SHOPIFY_WEBHOOK_SECRET belum di-set' });
+    return res.status(503).json({ error: 'webhook belum dikonfigurasi' });
+  }
+
+  // Verifikasi tanda tangan: HMAC-SHA256 atas raw body, base64, dibanding
+  // header X-Shopify-Hmac-Sha256 secara constant-time.
+  const givenHmac = String(req.get('X-Shopify-Hmac-Sha256') || '');
+  const digest = crypto
+    .createHmac('sha256', secret)
+    .update(req.rawBody || Buffer.alloc(0))
+    .digest('base64');
+  const a = Buffer.from(digest);
+  const b = Buffer.from(givenHmac);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    logEvent(req, 'shopify.webhook.bad_hmac', {});
+    return res.status(401).json({ error: 'HMAC tidak valid' });
+  }
+
+  const f = req.body || {};
+  // name fulfillment = "{order_name}.{n}", mis. "#8543.1" -> nomor order 8543.
+  const orderNum = String(f.name || '').replace(/^#/, '').split('.')[0];
+  const trackingUrls = [
+    ...(Array.isArray(f.tracking_urls) ? f.tracking_urls : []),
+    ...(f.tracking_url ? [f.tracking_url] : []),
+  ];
+  const shipper = trackingUrls.map(shipperForTrackingUrl).find(Boolean) || null;
+  const base = { order: orderNum, order_id: f.order_id, tracking_urls: trackingUrls, shipper };
+
+  if (!orderNum) {
+    logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'payload tanpa name' });
+    return res.status(200).json({ skipped: 'payload tanpa name' });
+  }
+  if (!shipper) {
+    logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'tracking URL tidak dikenal mapping' });
+    return res.status(200).json({ skipped: 'tracking URL tidak dikenal', tracking_urls: trackingUrls });
+  }
+
+  try {
+    const result = await smartLookup(`SHF-${orderNum}`);
+    if (!result.found) {
+      // 502 supaya Shopify retry — order mungkin belum tersinkron ke Jubelio.
+      logEvent(req, 'shopify.webhook.notfound', base);
+      return res.status(502).json({ error: `SHF-${orderNum} belum ada di Jubelio, akan di-retry Shopify` });
+    }
+    const detail = result.order;
+    // Pengaman salah order: ref_no Jubelio = legacy id order Shopify.
+    if (detail.ref_no && f.order_id && String(detail.ref_no) !== String(f.order_id)) {
+      logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'ref_no mismatch', ref_no: detail.ref_no });
+      return res.status(200).json({ skipped: 'ref_no tidak cocok, tidak diubah demi aman' });
+    }
+    const current = currentShipperOf(detail);
+    if (!isFillable(current) || current.trim().toLowerCase() === shipper) {
+      logEvent(req, 'shopify.webhook.skip', { ...base, reason: 'kurir sudah terisi', current });
+      return res.status(200).json({ skipped: 'kurir sudah terisi', current });
+    }
+
+    const { afterValue, changed } = await applyShipper(detail, shipper);
+    logEvent(req, changed ? 'shopify.webhook.filled' : 'shopify.webhook.unverified', {
+      ...base,
+      salesorder_no: detail.salesorder_no,
+      before: current,
+      after: afterValue,
+    });
+    if (!changed) return res.status(500).json({ error: 'update terkirim tapi verifikasi gagal', after: afterValue });
+    return res.status(200).json({ updated: detail.salesorder_no, shipper });
+  } catch (err) {
+    logEvent(req, 'shopify.webhook.error', { ...base, message: err.message, upstream: truncate(err.response?.data, 300) });
+    // 500 -> Shopify retry otomatis (idempoten, aman diulang).
+    return res.status(500).json({ error: err.message });
   }
 });
 

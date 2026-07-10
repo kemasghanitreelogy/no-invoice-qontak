@@ -297,4 +297,9 @@ module.exports = {
   searchOrdersByName,
   pickFromRows,
   boundedMatch,
+  // Helper low-level untuk scripts/ (mis. update-shipper). Service HTTP-nya
+  // sendiri tetap read-only — jangan tambah panggilan tulis di src/.
+  withAuth,
+  http,
+  authHeaders,
 };
