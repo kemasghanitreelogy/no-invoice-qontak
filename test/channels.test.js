@@ -59,3 +59,15 @@ test('channelOfRow: fallback prefix salesorder_no bila channel_name kosong', () 
   assert.equal(channelOfRow({ salesorder_no: 'XX-1' }), null); // tak dikenal -> null
   assert.equal(channelOfRow({}), null);
 });
+
+test('resolveChannel: WS=wholesale & DP=direct phone via WhatsApp -> internal; web resmi -> shopify', () => {
+  assert.equal(canon('wholesale'), 'internal');
+  assert.equal(canon('grosir'), 'internal');
+  assert.equal(canon('dp'), 'internal');
+  assert.equal(canon('direct phone'), 'internal');
+  assert.equal(canon('telepon'), 'internal');
+  assert.equal(canon('telpon'), 'internal');
+  assert.equal(canon('chat'), 'internal');
+  assert.equal(canon('web resmi'), 'shopify');
+  assert.equal(canon('website resmi'), 'shopify');
+});

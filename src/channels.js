@@ -2,15 +2,28 @@
 // typo (algoritma yang sama dengan name-matching: Damerau-Levenshtein).
 // Kanon mengikuti channel_name Jubelio milik toko ini (hasil enumerasi
 // 2026-07-10): SHOPIFY, SHOPEE, TOKOPEDIA, TIKTOK ("Shop | Tokopedia",
-// prefix TT-), INTERNAL (WS/CS/DP/DW/LB/EB).
+// prefix TT-), INTERNAL. Arti prefix INTERNAL (konfirmasi user 2026-07-10):
+// WS = Wholesale, DP = Direct Phone — dua-duanya order lewat WhatsApp/chat
+// (kanal yang dilayani API ini), jadi pelanggan yang bilang "order lewat
+// WA/chat/telepon/wholesale" maksudnya channel internal. Pelanggan Shopify
+// lazim menyebut "lewat web / web resmi".
 const { damerauLevenshtein } = require('./matching/score');
 
 const CHANNELS = [
-  { canonical: 'shopify', synonyms: ['shopify', 'shopi', 'sopify', 'web', 'website', 'webstore', 'web store', 'treelogy.com', 'toko online'] },
+  { canonical: 'shopify', synonyms: ['shopify', 'shopi', 'sopify', 'web', 'website', 'webstore', 'web store', 'web resmi', 'website resmi', 'treelogy.com', 'toko online'] },
   { canonical: 'shopee', synonyms: ['shopee', 'shope', 'sopi', 'shopee id', 'sp'] },
   { canonical: 'tokopedia', synonyms: ['tokopedia', 'tokped', 'toped', 'tp'] },
   { canonical: 'tiktok', synonyms: ['tiktok', 'tik tok', 'tiktok shop', 'tiktokshop', 'tt'] },
-  { canonical: 'internal', synonyms: ['internal', 'manual', 'offline', 'whatsapp', 'wa', 'ws', 'cs'] },
+  {
+    canonical: 'internal',
+    synonyms: [
+      'internal', 'manual', 'offline',
+      'whatsapp', 'wa', 'chat', // order via chat WA (WS/DP dua-duanya lewat sini)
+      'ws', 'wholesale', 'grosir', // WS = Wholesale
+      'dp', 'direct phone', 'telepon', 'telpon', 'telp', // DP = Direct Phone
+      'cs',
+    ],
+  },
 ];
 
 const norm = (v) => String(v || '').toLowerCase().trim().replace(/\s+/g, ' ');
