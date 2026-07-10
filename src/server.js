@@ -264,16 +264,25 @@ async function handleSearchByName(req, res) {
       }
     }
 
-    // Lacak resi HANYA untuk order teratas saat hasil tidak ambigu — hemat
-    // kuota BinderByte dan mencegah menampilkan tracking milik orang lain
-    // pada hasil yang masih meragukan.
+    // Lacak resi saat hasil TIDAK ambigu — untuk SEMUA order milik orang
+    // yang sama dengan hasil teratas (pelanggan bisa punya beberapa order
+    // aktif), maks 3 demi kuota BinderByte. Hasil ambigu tidak dilacak:
+    // jangan tampilkan posisi paket orang yang belum tentu benar.
     if (!ambiguous && orders.length) {
-      const topDetail = detailByNo.get(orders[0].salesorder_no);
-      const tracking = topDetail ? await trackOrder(topDetail) : null;
-      if (tracking) {
-        orders[0] = { ...orders[0], tracking };
-        logEvent(req, 'tracking.result', { awb: tracking.awb, courier: tracking.courier, status: tracking.status || null, error: tracking.error || null });
-      }
+      const person = normalizeName(orders[0].matched_name || '');
+      const targets = orders
+        .filter((o) => normalizeName(o.matched_name || '') === person)
+        .slice(0, 3);
+      await Promise.all(
+        targets.map(async (o) => {
+          const detail = detailByNo.get(o.salesorder_no);
+          const tracking = detail ? await trackOrder(detail) : null;
+          if (tracking) {
+            o.tracking = tracking;
+            logEvent(req, 'tracking.result', { salesorder_no: o.salesorder_no, awb: tracking.awb, courier: tracking.courier, status: tracking.status || null, error: tracking.error || null });
+          }
+        }),
+      );
     }
 
     logEvent(req, 'byname.result', {
