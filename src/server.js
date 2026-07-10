@@ -12,6 +12,7 @@ const {
 const { syncShippers } = require('./shopify-sync');
 const { withRetry } = require('./retry');
 const { notifyTelegram, notifyError } = require('./notify');
+const { trackOrder } = require('./binderbyte');
 const { formatOrder } = require('./format');
 const { parseDateInput, wibDateOf, diffDays } = require('./dates');
 const { normalizeName } = require('./matching');
@@ -111,10 +112,15 @@ app.post('/api/orders/lookup', async (req, res) => {
     // berdasarkan format input — angka panjang ambigu antara tiktok & tokopedia.
     const detected_channel =
       (summary?.channel || result.detection.channel || 'unknown').toLowerCase();
+    // Order yang sudah punya kurir + resi (jne/jnt/lion) dilacak live via
+    // BinderByte. Non-fatal: gagal lacak -> field tracking berisi error.
+    const tracking = await trackOrder(result.order);
+    if (tracking) logEvent(req, 'tracking.result', { awb: tracking.awb, courier: tracking.courier, status: tracking.status || null, error: tracking.error || null });
     return res.json({
       input,
       detected_channel,
       ...summary,
+      ...(tracking ? { tracking } : {}),
       ...(verbose ? { _raw: result.order } : {}),
     });
   } catch (err) {
@@ -188,9 +194,11 @@ async function handleSearchByName(req, res) {
     }
     // Detail lengkap hanya untuk kandidat >= probable (privacy: match lemah
     // tidak pernah membuka detail order).
+    const detailByNo = new Map(); // untuk pelacakan resi order teratas
     let orders = await Promise.all(
       primary.map(async ({ row, match }) => {
         const detail = await getOrderDetail(row.salesorder_id);
+        detailByNo.set(detail.salesorder_no, detail);
         // Timestamp pick gudang ("Diambil") tidak ada di detail order —
         // ambil dari picklist bila row pencarian membawa picklist_id.
         // Pengayaan opsional: gagal fetch picklist tidak menggagalkan response.
@@ -253,6 +261,18 @@ async function handleSearchByName(req, res) {
           ambiguous = false;
           resolved_by_date = true;
         }
+      }
+    }
+
+    // Lacak resi HANYA untuk order teratas saat hasil tidak ambigu — hemat
+    // kuota BinderByte dan mencegah menampilkan tracking milik orang lain
+    // pada hasil yang masih meragukan.
+    if (!ambiguous && orders.length) {
+      const topDetail = detailByNo.get(orders[0].salesorder_no);
+      const tracking = topDetail ? await trackOrder(topDetail) : null;
+      if (tracking) {
+        orders[0] = { ...orders[0], tracking };
+        logEvent(req, 'tracking.result', { awb: tracking.awb, courier: tracking.courier, status: tracking.status || null, error: tracking.error || null });
       }
     }
 
